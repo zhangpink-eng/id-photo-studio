@@ -488,33 +488,124 @@ export default function PhotoEditor({ image, imageUrl, scene, onReset }: PhotoEd
   const sizeInvalid = isCustom && (effectiveWidthPx < 10 || effectiveHeightPx < 10);
 
   return (
-    <div className="space-y-8">
-      {/* ====== 场景提示条 ====== */}
-      {scene && (
-        <div className="bg-gradient-to-r from-brand-50 to-blue-50 rounded-2xl border border-brand-100 p-4">
-          <div className="flex items-start gap-3">
-            <span className="text-xl shrink-0">{scene.icon}</span>
-            <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-2 mb-1">
-                <span className="font-semibold text-gray-800">{scene.name}</span>
-                <span className="text-xs bg-white/80 text-brand-600 px-2 py-0.5 rounded-full border border-brand-200">
-                  {scene.sizeId} · {scene.bgColor === '#FFFFFF' ? '白底' : scene.bgColor === '#4476C7' ? '蓝底' : scene.bgColor === '#E53935' ? '红底' : '自定义底色'}
-                </span>
+    <>
+      {/* ====== 全屏处理遮罩层 ====== */}
+      {(isProcessing || step === 'error') && (
+        <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-white/95 backdrop-blur-sm">
+          <div className="w-full max-w-md mx-auto px-6">
+            {step === 'error' ? (
+              /* 错误状态 */
+              <div className="text-center">
+                <div className="text-6xl mb-6">😅</div>
+                <h3 className="text-xl font-bold text-gray-800 mb-3">处理失败</h3>
+                <div className="bg-red-50 rounded-xl px-5 py-4 mb-6 text-sm text-red-700 border border-red-200">
+                  {error}
+                </div>
               </div>
-              <div className="flex flex-wrap gap-1">
-                {scene.tips.slice(0, 4).map((tip) => (
-                  <span key={tip} className="text-xs text-gray-500 bg-white/60 px-2 py-0.5 rounded-full">
-                    {tip}
-                  </span>
-                ))}
-                {scene.tips.length > 4 && (
-                  <span className="text-xs text-gray-400">+{scene.tips.length - 4}</span>
+            ) : (
+              /* 处理中 */
+              <div className="text-center">
+                {/* 场景信息（顶部） */}
+                {scene && (
+                  <div className="mb-8">
+                    <span className="text-4xl block mb-2">{scene.icon}</span>
+                    <h2 className="text-lg font-semibold text-gray-700">{scene.name}</h2>
+                    <p className="text-sm text-gray-400 mt-0.5">
+                      {scene.sizeId} · {scene.bgColor === '#FFFFFF' ? '白底' : scene.bgColor === '#4476C7' ? '蓝底' : scene.bgColor === '#E53935' ? '红底' : '自定义'}
+                    </p>
+                  </div>
                 )}
+
+                {/* 环形进度 */}
+                <div className="relative w-24 h-24 mx-auto mb-8">
+                  <svg className="animate-spin w-24 h-24 text-brand-200" viewBox="0 0 100 100" style={{animationDuration:'3s'}}>
+                    <circle className="opacity-25" cx="50" cy="50" r="45" stroke="currentColor" strokeWidth="6" fill="none" />
+                  </svg>
+                  <svg className="absolute inset-0 w-24 h-24 text-brand-500 -rotate-90" viewBox="0 0 100 100">
+                    <circle cx="50" cy="50" r="45" stroke="currentColor" strokeWidth="6" fill="none"
+                      strokeDasharray={`${2 * Math.PI * 45}`}
+                      strokeDashoffset={`${2 * Math.PI * 45 * (1 - progress / 100)}`}
+                      strokeLinecap="round"
+                      style={{ transition: 'stroke-dashoffset 0.4s ease-out' }}
+                    />
+                  </svg>
+                  <div className="absolute inset-0 flex items-center justify-center">
+                    <span className="text-lg font-bold text-brand-600">{progress}%</span>
+                  </div>
+                </div>
+
+                {/* 当前状态 */}
+                <p className="text-base font-medium text-gray-700 mb-1">{statusText}</p>
+                <p className="text-xs text-gray-400">请稍候，正在生成证件照...</p>
+
+                {/* 自动修正报告 */}
+                {fixResults.length > 0 && (
+                  <div className="mt-5 bg-amber-50 rounded-xl px-4 py-3 border border-amber-200 text-left">
+                    <p className="text-xs font-medium text-amber-700 mb-1.5">🔧 照片自动优化</p>
+                    {fixResults.map((fix) => (
+                      <p key={fix.id} className="text-xs text-amber-600 flex items-start gap-1.5">
+                        <span>{fix.action === 'fixed' ? '✅' : '💡'}</span>
+                        <span>{fix.message}</span>
+                      </p>
+                    ))}
+                  </div>
+                )}
+
+                {/* 阶段指示 */}
+                <div className="mt-6 space-y-1.5 text-left max-w-xs mx-auto">
+                  {PROCESSING_STAGES.map((stage, i) => {
+                    const active = activeStageIndex === i;
+                    const done = i < activeStageIndex;
+                    return (
+                      <div key={stage.key} className={`flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm ${
+                        active ? 'bg-brand-50' : done ? 'bg-green-50' : 'opacity-30'
+                      }`}>
+                        <span className="shrink-0 w-4 h-4 flex items-center justify-center text-xs">
+                          {done ? '✅' : active ? '🔄' : '⏳'}
+                        </span>
+                        <span className={active ? 'font-medium text-brand-700' : done ? 'text-green-600' : 'text-gray-400'}>
+                          {stage.icon} {stage.label}
+                        </span>
+                        {active && <span className="ml-auto text-xs text-brand-500">{progress}%</span>}
+                        {done && <span className="ml-auto text-xs text-green-500">完成</span>}
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
-            </div>
+            )}
           </div>
         </div>
       )}
+
+      {/* ====== 编辑器内容（完成/空闲时可见）====== */}
+      <div className={`space-y-8 ${isProcessing ? 'hidden' : ''}`}>
+        {/* ====== 场景提示条 ====== */}
+        {scene && (
+          <div className="bg-gradient-to-r from-brand-50 to-blue-50 rounded-2xl border border-brand-100 p-4">
+            <div className="flex items-start gap-3">
+              <span className="text-xl shrink-0">{scene.icon}</span>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="font-semibold text-gray-800">{scene.name}</span>
+                  <span className="text-xs bg-white/80 text-brand-600 px-2 py-0.5 rounded-full border border-brand-200">
+                    {scene.sizeId} · {scene.bgColor === '#FFFFFF' ? '白底' : scene.bgColor === '#4476C7' ? '蓝底' : scene.bgColor === '#E53935' ? '红底' : '自定义底色'}
+                  </span>
+                </div>
+                <div className="flex flex-wrap gap-1">
+                  {scene.tips.slice(0, 4).map((tip) => (
+                    <span key={tip} className="text-xs text-gray-500 bg-white/60 px-2 py-0.5 rounded-full">
+                      {tip}
+                    </span>
+                  ))}
+                  {scene.tips.length > 4 && (
+                    <span className="text-xs text-gray-400">+{scene.tips.length - 4}</span>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
       {/* ====== 图片展示区 ====== */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -596,94 +687,6 @@ export default function PhotoEditor({ image, imageUrl, scene, onReset }: PhotoEd
 
       {/* ====== 控制面板 ====== */}
       <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 space-y-6">
-        {/* ---- 多阶段进度 ---- */}
-        {/* ---- 处理完成提示 ---- */}
-        {step === 'done' && (
-          <div className="bg-green-50 rounded-xl p-4 border border-green-200">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3 min-w-0">
-                <span className="text-2xl">✅</span>
-                <div className="min-w-0">
-                  <div className="font-medium text-green-800">处理完成</div>
-                  <div className="text-xs text-green-600 mt-0.5 truncate">{statusText}</div>
-                </div>
-              </div>
-              <span className="shrink-0 text-sm font-medium text-green-600 bg-green-100 px-3 py-1 rounded-full">100%</span>
-            </div>
-          </div>
-        )}
-
-        {isProcessing && (
-          <div className="bg-white rounded-xl border border-brand-100 overflow-hidden">
-            {/* 阶段列表 */}
-            <div className="divide-y divide-brand-50">
-              {PROCESSING_STAGES.map((stage, i) => {
-                const isActive = activeStageIndex === i;
-                const isDone = i < activeStageIndex;
-
-                return (
-                  <div
-                    key={stage.key}
-                    className={`flex items-center gap-3 px-4 py-3 text-sm transition-colors ${
-                      isActive ? 'bg-brand-50' : isDone ? 'bg-green-50/50' : 'opacity-40'
-                    }`}
-                  >
-                    {/* 状态图标 */}
-                    <span className="shrink-0 w-6 h-6 flex items-center justify-center">
-                      {isDone ? (
-                        <span className="text-green-500">✅</span>
-                      ) : isActive ? (
-                        <svg className="animate-spin w-4 h-4 text-brand-600" viewBox="0 0 24 24">
-                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                        </svg>
-                      ) : (
-                        <span className="text-gray-300">⏳</span>
-                      )}
-                    </span>
-
-                    {/* 阶段名 */}
-                    <div className="min-w-0 flex-1">
-                      <div className={`font-medium ${isActive ? 'text-brand-700' : isDone ? 'text-gray-500' : 'text-gray-400'}`}>
-                        {stage.icon} {stage.label}
-                      </div>
-                      <div className={`text-xs ${isActive ? 'text-brand-500' : 'text-gray-400'}`}>
-                        {isActive ? statusText || stage.detail : isDone ? '已完成' : '等待中'}
-                      </div>
-                    </div>
-
-                    {/* 当前阶段进度 */}
-                    {isActive && (
-                      <span className="shrink-0 text-xs font-medium text-brand-600">{progress}%</span>
-                    )}
-                    {isDone && (
-                      <span className="shrink-0 text-xs text-green-500">完成</span>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-
-            {/* 总进度条 */}
-            <div className="h-1.5 bg-gray-100">
-              <div
-                className="h-full bg-gradient-to-r from-brand-500 to-green-500 transition-all duration-500 ease-out"
-                style={{ width: `${progress}%` }}
-              />
-            </div>
-          </div>
-        )}
-
-        {error && (
-          <div className="bg-red-50 rounded-xl px-4 py-3 flex items-start gap-2 text-sm text-red-700">
-            <span className="mt-0.5 shrink-0">⚠️</span>
-            <span>{error}</span>
-            <button onClick={() => setError(null)} className="ml-auto text-red-400 hover:text-red-600">
-              ✕
-            </button>
-          </div>
-        )}
-
         {/* ---- 美颜 ---- */}
         {showBeauty && (
           <div className="bg-gradient-to-r from-pink-50 to-rose-50 rounded-xl p-5 border border-pink-100">
@@ -1066,7 +1069,10 @@ export default function PhotoEditor({ image, imageUrl, scene, onReset }: PhotoEd
             />
           </div>
         )}
+
+          {/* ====== 控制面板结束 ====== */}
+        </div>
       </div>
-    </div>
+    </>
   );
 }
