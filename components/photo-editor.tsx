@@ -3,7 +3,14 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { removeImageBackground } from '@/lib/background-removal';
 import { compositeImage } from '@/lib/image-utils';
-import { PHOTO_SIZES, BG_COLORS, DEFAULT_BG_COLOR, createGradient, type PhotoSize } from '@/lib/constants';
+import {
+  PHOTO_SIZES,
+  BG_COLORS,
+  DEFAULT_BG_COLOR,
+  CUSTOM_SIZE_ID,
+  createGradient,
+  type PhotoSize,
+} from '@/lib/constants';
 
 interface PhotoEditorProps {
   image: File;
@@ -25,6 +32,8 @@ export default function PhotoEditor({ image, imageUrl, onReset }: PhotoEditorPro
 
   // ---- Size ----
   const [selectedSize, setSelectedSize] = useState<PhotoSize>(PHOTO_SIZES[0]);
+  const [customW, setCustomW] = useState(400);
+  const [customH, setCustomH] = useState(500);
 
   // ---- Processing State ----
   const [step, setStep] = useState<ProcessingStep>('idle');
@@ -35,10 +44,15 @@ export default function PhotoEditor({ image, imageUrl, onReset }: PhotoEditorPro
   // ---- Download ----
   const [downloading, setDownloading] = useState(false);
 
+  // ---- 实际生效的尺寸（自定义时覆盖） ----
+  const isCustom = selectedSize.id === CUSTOM_SIZE_ID;
+
+  const effectiveWidthPx = isCustom ? customW : selectedSize.widthPx;
+  const effectiveHeightPx = isCustom ? customH : selectedSize.heightPx;
+
   // ---- Cleanup ----
   const previewUrlRef = useRef<string | null>(null);
 
-  // 清理预览 URL
   const updatePreviewUrl = useCallback((url: string | null) => {
     if (previewUrlRef.current) {
       URL.revokeObjectURL(previewUrlRef.current);
@@ -88,15 +102,18 @@ export default function PhotoEditor({ image, imageUrl, onReset }: PhotoEditorPro
     let cancelled = false;
 
     const doComposite = async () => {
-      const targetW = selectedSize.widthPx;
-      const targetH = selectedSize.heightPx;
+      const targetW = effectiveWidthPx;
+      const targetH = effectiveHeightPx;
+
+      if (targetW < 1 || targetH < 1) {
+        updatePreviewUrl(null);
+        return;
+      }
 
       try {
-        // 确定填充样式
         let fillStyle: string | CanvasGradient;
 
         if (bgColor === 'gradient') {
-          // 创建渐变画布
           const gradCanvas = document.createElement('canvas');
           gradCanvas.width = targetW;
           gradCanvas.height = targetH;
@@ -127,12 +144,15 @@ export default function PhotoEditor({ image, imageUrl, onReset }: PhotoEditorPro
     return () => {
       cancelled = true;
     };
-  }, [personBlob, bgColor, customColor, selectedSize, updatePreviewUrl]);
+    // 对所有依赖都加上 —— 包括 effective 尺寸
+  }, [personBlob, bgColor, customColor, effectiveWidthPx, effectiveHeightPx, updatePreviewUrl]);
 
   // ---- 下载 ----
   const handleDownload = useCallback(async () => {
     if (!previewUrl) return;
     setDownloading(true);
+
+    const sizeLabel = isCustom ? `自定义_${effectiveWidthPx}x${effectiveHeightPx}` : selectedSize.name;
 
     try {
       const response = await fetch(previewUrl);
@@ -140,7 +160,7 @@ export default function PhotoEditor({ image, imageUrl, onReset }: PhotoEditorPro
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `证件照_${selectedSize.name}_${selectedSize.widthPx}x${selectedSize.heightPx}.png`;
+      a.download = `证件照_${sizeLabel}_${effectiveWidthPx}x${effectiveHeightPx}.png`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -151,7 +171,7 @@ export default function PhotoEditor({ image, imageUrl, onReset }: PhotoEditorPro
     } finally {
       setDownloading(false);
     }
-  }, [previewUrl, selectedSize]);
+  }, [previewUrl, selectedSize, effectiveWidthPx, effectiveHeightPx, isCustom]);
 
   // ---- 背景色按钮点击 ----
   const handleBgSelect = (value: string) => {
@@ -159,13 +179,11 @@ export default function PhotoEditor({ image, imageUrl, onReset }: PhotoEditorPro
     setShowCustomPicker(value === 'custom');
   };
 
-  // ---- 当前实际填充颜色（用于预览色块） ----
-  const currentBgSwatch = bgColor === 'custom' ? customColor : bgColor;
-
   // ---- 按钮状态 ----
   const isProcessing = step === 'downloading' || step === 'processing';
   const hasPerson = personBlob !== null;
   const hasPreview = previewUrl !== null;
+  const sizeInvalid = isCustom && (effectiveWidthPx < 10 || effectiveHeightPx < 10);
 
   return (
     <div className="space-y-8">
@@ -200,7 +218,7 @@ export default function PhotoEditor({ image, imageUrl, onReset }: PhotoEditorPro
             </h3>
             {hasPreview && (
               <span className="text-xs text-gray-400">
-                {selectedSize.widthPx} × {selectedSize.heightPx}px
+                {effectiveWidthPx} × {effectiveHeightPx}px
               </span>
             )}
           </div>
@@ -302,7 +320,6 @@ export default function PhotoEditor({ image, imageUrl, onReset }: PhotoEditorPro
               />
             )}
 
-            {/* 当前颜色标签 */}
             <span className="text-xs text-gray-400 ml-1">
               {bgColor === 'gradient' ? '渐变' : bgColor === 'custom' ? customColor : ''}
             </span>
@@ -312,7 +329,7 @@ export default function PhotoEditor({ image, imageUrl, onReset }: PhotoEditorPro
         {/* ---- 尺寸选择 ---- */}
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-3">
-            照片尺寸 <span className="text-gray-400 font-normal">— 选择标准证件照尺寸</span>
+            照片尺寸 <span className="text-gray-400 font-normal">— 选择标准尺寸或自定义</span>
           </label>
           <div className="flex flex-wrap gap-2">
             {PHOTO_SIZES.map((size) => {
@@ -328,16 +345,51 @@ export default function PhotoEditor({ image, imageUrl, onReset }: PhotoEditorPro
                   }`}
                 >
                   <span className="font-semibold">{size.name}</span>
-                  <span className={`ml-1.5 ${isActive ? 'text-white/75' : 'text-gray-400'}`}>
-                    {size.widthPx}×{size.heightPx}
-                  </span>
+                  {size.id !== CUSTOM_SIZE_ID && (
+                    <span className={`ml-1.5 ${isActive ? 'text-white/75' : 'text-gray-400'}`}>
+                      {size.widthPx}×{size.heightPx}
+                    </span>
+                  )}
                 </button>
               );
             })}
           </div>
 
+          {/* 自定义尺寸输入 */}
+          {isCustom && (
+            <div className="mt-4 flex flex-wrap items-end gap-4">
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">宽度 (px)</label>
+                <input
+                  type="number"
+                  min={10}
+                  max={8000}
+                  value={customW}
+                  onChange={(e) => setCustomW(Math.max(10, Number(e.target.value) || 0))}
+                  className="w-28 px-3 py-2 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent"
+                />
+              </div>
+              <div className="text-gray-300 pb-2">×</div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">高度 (px)</label>
+                <input
+                  type="number"
+                  min={10}
+                  max={8000}
+                  value={customH}
+                  onChange={(e) => setCustomH(Math.max(10, Number(e.target.value) || 0))}
+                  className="w-28 px-3 py-2 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent"
+                />
+              </div>
+              <div className="text-xs text-gray-400 pb-2">
+                {effectiveWidthPx}×{effectiveHeightPx}px ={' '}
+                {(effectiveWidthPx / 300 * 25.4).toFixed(1)}×{(effectiveHeightPx / 300 * 25.4).toFixed(1)}mm
+              </div>
+            </div>
+          )}
+
           {/* 尺寸详情 */}
-          {selectedSize && (
+          {selectedSize && !isCustom && (
             <div className="mt-3 text-xs text-gray-400 bg-gray-50 rounded-lg px-3 py-2 inline-block">
               {selectedSize.description} · {selectedSize.widthMm}×{selectedSize.heightMm}mm · {selectedSize.widthPx}×{selectedSize.heightPx}px @ 300DPI
             </div>
@@ -376,9 +428,9 @@ export default function PhotoEditor({ image, imageUrl, onReset }: PhotoEditorPro
           {/* 下载按钮 */}
           <button
             onClick={handleDownload}
-            disabled={!hasPreview || downloading}
+            disabled={!hasPreview || downloading || sizeInvalid}
             className={`px-6 py-3 rounded-xl font-medium transition-all flex items-center gap-2 ${
-              hasPreview && !downloading
+              hasPreview && !downloading && !sizeInvalid
                 ? 'bg-green-600 text-white hover:bg-green-700 shadow-lg shadow-green-200'
                 : 'bg-gray-200 text-gray-400 cursor-not-allowed'
             }`}
@@ -404,7 +456,6 @@ export default function PhotoEditor({ image, imageUrl, onReset }: PhotoEditorPro
             🔄 重新上传
           </button>
 
-          {/* 状态提示 */}
           {statusText && step !== 'done' && !isProcessing && (
             <span className="text-sm text-gray-400">{statusText}</span>
           )}

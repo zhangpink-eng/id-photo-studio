@@ -9,6 +9,9 @@ export interface PhotoSize {
   description: string;    // 简短描述
 }
 
+/** 自定义尺寸的标记 ID */
+export const CUSTOM_SIZE_ID = '__custom__';
+
 export const PHOTO_SIZES: PhotoSize[] = [
   { id: '1inch',    name: '1寸',   widthMm: 25, heightMm: 35, widthPx: 295, heightPx: 413, description: '标准一寸' },
   { id: 'small1',   name: '小1寸', widthMm: 22, heightMm: 32, widthPx: 260, heightPx: 378, description: '小一寸' },
@@ -18,6 +21,7 @@ export const PHOTO_SIZES: PhotoSize[] = [
   { id: 'large2',   name: '大2寸', widthMm: 35, heightMm: 53, widthPx: 413, heightPx: 626, description: '大两寸' },
   { id: 'idcard',   name: '身份证', widthMm: 26, heightMm: 32, widthPx: 358, heightPx: 441, description: '身份证照' },
   { id: 'visa',     name: '签证',  widthMm: 51, heightMm: 51, widthPx: 600, heightPx: 600, description: '方形签证照' },
+  { id: CUSTOM_SIZE_ID, name: '自定义', widthMm: 0, heightMm: 0, widthPx: 400, heightPx: 500, description: '自定义尺寸' },
 ];
 
 /** 预设背景色 */
