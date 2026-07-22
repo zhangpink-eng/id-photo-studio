@@ -29,8 +29,8 @@ export interface PreviewTemplate {
   name: string;
   icon: string;
   description: string;
-  /** 渲染函数 */
-  render: (ctx: CanvasRenderingContext2D, w: number, h: number, photoBlob: Blob) => Promise<void>;
+  /** 渲染函数（photo 为已加载好的 Image 元素） */
+  render: (ctx: CanvasRenderingContext2D, w: number, h: number, img: HTMLImageElement) => Promise<void>;
 }
 
 /**
@@ -39,7 +39,7 @@ export interface PreviewTemplate {
 export async function renderTemplate(
   templateId: string,
   canvas: HTMLCanvasElement,
-  photoBlob: Blob,
+  img: HTMLImageElement,
 ): Promise<void> {
   const template = TEMPLATES.find((t) => t.id === templateId);
   if (!template) throw new Error(`未知模板: ${templateId}`);
@@ -47,7 +47,7 @@ export async function renderTemplate(
   const ctx = canvas.getContext('2d')!;
   const { width: w, height: h } = canvas;
   ctx.clearRect(0, 0, w, h);
-  await template.render(ctx, w, h, photoBlob);
+  await template.render(ctx, w, h, img);
 }
 
 /** 加载图片并绘制到指定区域（cover 模式） */
@@ -69,15 +69,6 @@ function drawPhotoCover(
   ctx.drawImage(img, sx, sy, sw, sh);
 }
 
-function loadImg(blob: Blob): Promise<HTMLImageElement> {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.onload = () => resolve(img);
-    img.onerror = reject;
-    img.src = URL.createObjectURL(blob);
-  });
-}
-
 // ============================================================
 // 模板定义
 // ============================================================
@@ -88,8 +79,7 @@ export const TEMPLATES: PreviewTemplate[] = [
     name: '纯色背景',
     icon: '🎨',
     description: '标准证件照效果',
-    render: async (ctx, w, h, photoBlob) => {
-      const img = await loadImg(photoBlob);
+    render: async (ctx, w, h, img) => {
       drawPhotoCover(ctx, img, 0, 0, w, h);
     },
   },
@@ -98,8 +88,7 @@ export const TEMPLATES: PreviewTemplate[] = [
     name: '相框效果',
     icon: '🖼️',
     description: '放在桌面相框里的效果',
-    render: async (ctx, w, h, photoBlob) => {
-      const img = await loadImg(photoBlob);
+    render: async (ctx, w, h, img) => {
 
       // 背景墙（木质纹理）
       ctx.fillStyle = '#d4a574';
@@ -157,8 +146,7 @@ export const TEMPLATES: PreviewTemplate[] = [
     name: '护照内页',
     icon: '🛂',
     description: '粘贴在护照上的效果',
-    render: async (ctx, w, h, photoBlob) => {
-      const img = await loadImg(photoBlob);
+    render: async (ctx, w, h, img) => {
 
       // 护照封面底色
       const grad = ctx.createLinearGradient(0, 0, w * 0.3, h);
@@ -225,8 +213,7 @@ export const TEMPLATES: PreviewTemplate[] = [
     name: '简历头像',
     icon: '📄',
     description: '简历上的圆形裁剪效果',
-    render: async (ctx, w, h, photoBlob) => {
-      const img = await loadImg(photoBlob);
+    render: async (ctx, w, h, img) => {
 
       // A4 纸背景
       ctx.fillStyle = '#fafafa';
@@ -306,8 +293,7 @@ export const TEMPLATES: PreviewTemplate[] = [
     name: '工牌效果',
     icon: '🪪',
     description: '挂在胸前的工作证效果',
-    render: async (ctx, w, h, photoBlob) => {
-      const img = await loadImg(photoBlob);
+    render: async (ctx, w, h, img) => {
 
       // 挂绳
       ctx.strokeStyle = '#2563eb';
@@ -390,8 +376,7 @@ export const TEMPLATES: PreviewTemplate[] = [
     name: '墙上装饰',
     icon: '🏠',
     description: '挂在墙上的大片效果',
-    render: async (ctx, w, h, photoBlob) => {
-      const img = await loadImg(photoBlob);
+    render: async (ctx, w, h, img) => {
 
       // 墙面
       ctx.fillStyle = '#e8e0d8';
@@ -447,8 +432,7 @@ export const TEMPLATES: PreviewTemplate[] = [
     name: '身份证效果',
     icon: '🆔',
     description: '身份证上的照片效果',
-    render: async (ctx, w, h, photoBlob) => {
-      const img = await loadImg(photoBlob);
+    render: async (ctx, w, h, img) => {
 
       // 卡片底色
       ctx.fillStyle = '#f8f5f0';
@@ -522,8 +506,7 @@ export const TEMPLATES: PreviewTemplate[] = [
     name: '证件证书',
     icon: '📜',
     description: '贴在证书/奖状上的效果',
-    render: async (ctx, w, h, photoBlob) => {
-      const img = await loadImg(photoBlob);
+    render: async (ctx, w, h, img) => {
 
       // 证书底色
       ctx.fillStyle = '#faf3e0';
