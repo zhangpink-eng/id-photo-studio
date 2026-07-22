@@ -59,37 +59,10 @@ async function removeImageBackgroundServer(
 
   onProgress?.(5, '正在上传照片...', 'uploading');
 
-  // 上传前压缩到最长边 1500px（减少上传时间，服务端推理也会 resize 到 1024）
-  let uploadBlob = imageBlob;
-  if (typeof document !== 'undefined') {
-    try {
-      const img = new Image();
-      await new Promise<void>((resolve, reject) => {
-        img.onload = () => resolve();
-        img.onerror = reject;
-        img.src = URL.createObjectURL(imageBlob);
-      });
-      const MAX_DIM = 1500;
-      let w = img.naturalWidth, h = img.naturalHeight;
-      if (w > MAX_DIM || h > MAX_DIM) {
-        const ratio = MAX_DIM / Math.max(w, h);
-        w = Math.round(w * ratio);
-        h = Math.round(h * ratio);
-        const canvas = document.createElement('canvas');
-        canvas.width = w;
-        canvas.height = h;
-        const ctx = canvas.getContext('2d')!;
-        ctx.drawImage(img, 0, 0, w, h);
-        uploadBlob = await new Promise<Blob>(resolve =>
-          canvas.toBlob(b => resolve(b!), 'image/jpeg', 0.9)
-        );
-        console.log(`[抠图] 压缩图片: ${(imageBlob.size / 1024).toFixed(0)}KB → ${(uploadBlob.size / 1024).toFixed(0)}KB`);
-      }
-    } catch {}
-  }
-
+  // 原图上传，不压缩 —— 服务器内部推理时会缩放到 1024×1024，
+  // 推理完将 mask 贴回原分辨率返回，保证最终输出质量。
   const formData = new FormData();
-  formData.append('image', uploadBlob, 'photo.jpg');
+  formData.append('image', imageBlob, 'photo.jpg');
 
   try {
     const response = await fetch(`${apiBase}/api/remove-bg`, {
