@@ -3,27 +3,43 @@
  *
  * 完全在浏览器本地执行，不上传图片数据到服务器。
  *
- * ⚠️ 工作原理解释：
- * 1. ✅ 图片数据仅在本地浏览器内处理，绝不外传
- * 2. ✅ AI 库代码（npm 包）本地加载
- * 3. ✅ WASM 运行时文件（~12MB）从本地 public/ 目录加载
- * 4. ⚠️ AI 模型权重（~20MB）首次使用时从 CDN 下载，之后由浏览器缓存
- *    - 如果希望完全离线使用，可手动下载模型放入 public/models/ 目录
+ * 资源加载优先级：
+ * 1. public/models/     → 本地 AI 模型文件（由 download-models.sh 下载，patch 脚本部署）
+ * 2. public/onnxruntime/ → 本地 WASM 运行时文件（由 patch-webgpu.sh 自动部署）
+ * 3. CDN 回退            → 如果本地无模型，自动从 CDN 加载
  */
 
 import { removeBackground } from '@imgly/background-removal';
-// onnxruntime 的全局 env 单例，与 onnxruntime-web 共享
-// 用于设置 WASM 文件加载路径为本地目录
 import { env } from 'onnxruntime-common';
 
 export type RemoveBgCallback = (progress: number, status: string) => void;
 
-// 是否已初始化 WASM 路径
+/** 使用的最轻量模型（42MB，isnet_quint8 = 8-bit 量化） */
+const DEFAULT_MODEL = 'isnet_quint8';
+
+// ===== 本地化配置 =====
+// 当 public/models/resources.json 存在时使用本地模型，否则回退 CDN
+const LOCAL_MODEL_PATH = '/models/';
+
 let wasmPathInitialized = false;
 
 /**
+ * 检测本地模型是否可用（通过 HEAD 请求检查 resources.json）
+ */
+async function checkLocalModelAvailable(): Promise<boolean> {
+  if (typeof window === 'undefined') return false;
+  try {
+    const resp = await fetch(`${LOCAL_MODEL_PATH}resources.json`, { method: 'HEAD' });
+    const ok = resp.ok;
+    if (ok) console.log('[抠图] 使用本地模型 (' + LOCAL_MODEL_PATH + ')');
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * 配置 onnxruntime 的 WASM 文件路径为本地 public/onnxruntime/
- * 确保浏览器从本地加载 ~12MB 的 WASM 运行时，而非 CDN。
  */
 function ensureWasmPath() {
   if (wasmPathInitialized) return;
@@ -45,25 +61,35 @@ export async function removeImageBackground(
 ): Promise<Blob> {
   onProgress?.(0, '初始化');
 
-  // 设置 WASM 文件本地加载路径
+  // 设置 WASM 本地加载路径
   ensureWasmPath();
+
+  // 异步检查本地模型是否可用
+  const localAvailable = await checkLocalModelAvailable();
+
+  onProgress?.(5, localAvailable ? '模型就绪' : '正在加载 AI 模型...');
 
   try {
     const result = await removeBackground(imageBlob, {
+      // 有本地模型时使用本地路径，否则使用库默认的 CDN 路径
+      ...(localAvailable && {
+        publicPath: LOCAL_MODEL_PATH,
+      }),
+      // 使用最小的量化模型（42MB），本地 / CDN 通用
+      model: DEFAULT_MODEL,
       progress: (key: string, current: number, total: number) => {
         if (total > 0) {
           const pct = Math.min(Math.round((current / total) * 100), 99);
           let status = key;
-          if (key === 'wasm') status = '正在加载 AI 模型...';
-          else if (key === 'compute' || key === 'inference') status = '正在识别人物轮廓...';
-          else if (key.startsWith('fetch:')) {
+          if (key === 'wasm')
+            status = '正在加载 AI 模型...';
+          else if (key === 'compute' || key === 'inference')
+            status = '正在识别人物轮廓...';
+          else if (key.startsWith('fetch:'))
             status = `正在下载模型 (${pct}%)`;
-          }
           onProgress?.(pct, status);
         }
       },
-      // 如果不希望使用 CDN 加载模型，可在此设置 publicPath 为本地路径
-      // 见项目 README 中的"完全离线部署"章节
     });
 
     onProgress?.(100, '完成');

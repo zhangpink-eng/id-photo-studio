@@ -9,3 +9,6 @@ next-env.d.ts
 
 # onnxruntime WASM 文件（~35MB），由 postinstall 自动生成
 public/onnxruntime/
+
+# AI 模型文件（~42MB+），由 download-models.sh + patch 部署
+public/models/

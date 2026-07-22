@@ -7,6 +7,7 @@
     "build": "npm run patch && next build",
     "start": "next start",
     "patch": "bash patch-webgpu.sh",
+    "download-models": "bash download-models.sh",
     "postinstall": "bash patch-webgpu.sh",
     "pretest": "bash patch-webgpu.sh"
   },
