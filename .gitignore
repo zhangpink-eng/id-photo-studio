@@ -6,3 +6,6 @@ dist/
 .env*.local
 *.tsbuildinfo
 next-env.d.ts
+
+# onnxruntime WASM 文件（~35MB），由 postinstall 自动生成
+public/onnxruntime/
