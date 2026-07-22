@@ -16,6 +16,7 @@ import type { SceneConfig } from '@/lib/scenes';
 import LayoutEditor from '@/components/layout-editor';
 import CompliancePanel from '@/components/compliance-panel';
 import BatchGenerator from '@/components/batch-generator';
+import { autoFixPipeline } from '@/lib/auto-fix';
 import { addHistoryRecord, generateThumbnail } from '@/lib/history';
 
 interface PhotoEditorProps {
@@ -176,6 +177,8 @@ export default function PhotoEditor({ image, imageUrl, scene, onReset }: PhotoEd
   const [statusText, setStatusText] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [activeStageIndex, setActiveStageIndex] = useState(-1);
+  /** 自动修正结果（用于展示给用户） */
+  const [fixResults, setFixResults] = useState<{ id: string; name: string; message: string; action: string }[]>([]);
 
   // ---- 下载状态 ----
   const [downloading, setDownloading] = useState(false);
@@ -211,19 +214,69 @@ export default function PhotoEditor({ image, imageUrl, scene, onReset }: PhotoEd
   const beautyRef = useRef(beauty);
   beautyRef.current = beauty;
 
-  // ---- AI 抠图 ----
+  // ---- AI 抠图（内含自动修正管线）----
   const handleRemoveBackground = useCallback(async () => {
     setStep('uploading');
     setError(null);
     setActiveStageIndex(0);
     setProgress(5);
-    setStatusText('正在准备照片...');
+    setStatusText('正在检查照片质量...');
+    setFixResults([]);
 
     try {
-      // Stage 0: 准备照片
-      let sourceBlob;
+      // Step 0: 加载原图 → 自动修正（曝光/色偏/分辨率检测）
+      const rawImg = await loadImage(imageUrl);
+      const rawCanvas = document.createElement('canvas');
+      rawCanvas.width = rawImg.naturalWidth;
+      rawCanvas.height = rawImg.naturalHeight;
+      const rawCtx = rawCanvas.getContext('2d')!;
+      rawCtx.drawImage(rawImg, 0, 0);
+      const rawImageData = rawCtx.getImageData(0, 0, rawImg.naturalWidth, rawImg.naturalHeight);
+
+      const fixes = autoFixPipeline(rawImageData, {
+        width: effectiveWidthPx,
+        height: effectiveHeightPx,
+      });
+      const fixLogs: { id: string; name: string; message: string; action: string }[] = [];
+
+      let fixedImageData = rawImageData;
+      let reEncode = false;
+
+      for (const fix of fixes) {
+        if (fix.action === 'fatal') {
+          // 不可修复的问题 → 提前退出
+          setStep('error');
+          setError(fix.message);
+          setStatusText('❌ ' + fix.message);
+          return;
+        }
+        if (fix.action === 'fixed' && fix.imageData) {
+          fixedImageData = fix.imageData;
+          reEncode = true;
+          fixLogs.push({ id: fix.id, name: fix.name, message: fix.message, action: 'fixed' });
+        }
+        if (fix.action === 'suggestion') {
+          fixLogs.push({ id: fix.id, name: fix.name, message: fix.message, action: 'suggestion' });
+        }
+      }
+      setFixResults(fixLogs);
+
+      // 将修正后的图转为 Blob
+      const fixCanvas = document.createElement('canvas');
+      fixCanvas.width = rawImg.naturalWidth;
+      fixCanvas.height = rawImg.naturalHeight;
+      const fixCtx = fixCanvas.getContext('2d')!;
+      fixCtx.putImageData(fixedImageData, 0, 0);
+      let sourceBlob = await new Promise<Blob>((resolve) =>
+        fixCanvas.toBlob((b) => resolve(b!), 'image/jpeg', 0.95)
+      );
+
+      setProgress(10);
+      setStatusText('正在应用美颜...');
+
+      // Step 1: 美颜（以修正后的图为基础）
       if (showBeautyRef.current) {
-        const img = await loadImage(imageUrl);
+        const img = await loadImage(sourceBlob);
         const canvas = document.createElement('canvas');
         canvas.width = img.naturalWidth;
         canvas.height = img.naturalHeight;
@@ -235,12 +288,10 @@ export default function PhotoEditor({ image, imageUrl, scene, onReset }: PhotoEd
         sourceBlob = await new Promise<Blob>((resolve) =>
           canvas.toBlob((b) => resolve(b!), 'image/jpeg', 0.95)
         );
-      } else {
-        sourceBlob = await fetch(imageUrl).then((r) => r.blob());
       }
       setProgress(15);
 
-      // Stage 1: 抠图推理（调用服务器或本地 AI）
+      // Step 2: 抠图推理
       setStep('inference');
       setActiveStageIndex(1);
       setStatusText('正在上传到服务器处理...');
@@ -260,7 +311,7 @@ export default function PhotoEditor({ image, imageUrl, scene, onReset }: PhotoEd
       });
       setProgress(85);
 
-      // 检测抠图结果是否有效（是否有足够的人像像素）
+      // Step 3: 检查抠图结果是否有效
       const hasPerson = await checkHasPerson(blob);
       if (!hasPerson) {
         setStep('error');
@@ -269,7 +320,7 @@ export default function PhotoEditor({ image, imageUrl, scene, onReset }: PhotoEd
         return;
       }
 
-      // Stage 2: 合成预览
+      // Step 4: 合成预览
       setStep('compositing');
       setActiveStageIndex(2);
       setStatusText('正在合成效果...');
@@ -279,9 +330,9 @@ export default function PhotoEditor({ image, imageUrl, scene, onReset }: PhotoEd
       setProgress(100);
       setStatusText('✅ 完成');
     } catch (err) {
-      console.error('抠图失败:', err);
+      console.error('处理失败:', err);
       setStep('error');
-      setError('背景移除失败，请尝试其他照片或重试');
+      setError('处理失败，请尝试其他照片');
       setStatusText('❌ 处理失败');
     }
   }, [beautyUrl]);
@@ -888,14 +939,31 @@ export default function PhotoEditor({ image, imageUrl, scene, onReset }: PhotoEd
           )}
         </div>
 
-        {/* ---- 合规检测 ---- */}
+        {/* ---- 合规检测 + 场景提醒 ---- */}
         {hasPreview && (
-          <div className="pt-2">
+          <div className="pt-2 space-y-3">
             <CompliancePanel
               sceneName={scene?.name}
               sizeName={isCustom ? `自定义 ${effectiveWidthPx}×${effectiveHeightPx}` : selectedSize.name}
               bgLabel={bgColor === '#FFFFFF' ? '白色' : bgColor === '#4476C7' ? '蓝色' : bgColor === '#E53935' ? '红色' : bgColor === 'gradient' ? '渐变' : '自定义'}
+              fixResults={fixResults}
             />
+
+            {/* 场景着装/表情提醒（用户自查项） */}
+            {scene && step === 'done' && (
+              <div className="bg-blue-50 rounded-xl p-3 border border-blue-200">
+                <div className="text-xs font-medium text-blue-700 mb-1.5">
+                  📋 还需要检查这些
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {scene.tips.map((tip) => (
+                    <span key={tip} className="inline-flex items-center gap-1 bg-white/80 px-2 py-1 rounded text-xs text-blue-600">
+                      {tip}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
