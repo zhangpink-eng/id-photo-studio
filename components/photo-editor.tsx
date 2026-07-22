@@ -974,7 +974,7 @@ export default function PhotoEditor({ image, imageUrl, scene, onReset }: PhotoEd
         {/* ---- 场景预览 ---- */}
         {hasPreview && (
           <div className="pt-2">
-            <PreviewTemplates previewUrl={previewUrl} />
+            <PreviewTemplates previewUrl={previewUrl} scene={scene} />
           </div>
         )}
 
