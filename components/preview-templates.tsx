@@ -43,9 +43,18 @@ export default function PreviewTemplates({ personBlob, scene = null }: PreviewTe
 
       if (top !== -1 && bottom !== -1) {
         const sz = PHOTO_SIZES.find((s) => s.id === scene.sizeId);
-        const rt = sz ? sz.widthMm / sz.heightMm : 0.7;
-        const headPct = (bottom - top) / ih;
-        const inFrame = Math.min(99, Math.round(headPct * (ih / iw) * (1 / rt) * 100));
+        if (!sz) { URL.revokeObjectURL(blobUrl); return; }
+        const rt = sz.widthMm / sz.heightMm; // target W/H
+        // cover 模式选最大缩放
+        // widthScale = sz.widthPx/iw, heightScale = sz.heightPx/ih
+        const widthScale = sz.widthPx / iw;
+        const heightScale = sz.heightPx / ih;
+        const coverScale = Math.max(widthScale, heightScale);
+        const headH = bottom - top;
+        // 头部在最终图中的像素高度
+        const headPx = headH * coverScale;
+        // 占目标高度比例
+        const inFrame = Math.min(99, Math.round((headPx / sz.heightPx) * 100));
         setHeadRatio(inFrame);
       }
       URL.revokeObjectURL(blobUrl);
