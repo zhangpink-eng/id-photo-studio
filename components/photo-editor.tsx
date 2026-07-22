@@ -235,13 +235,16 @@ export default function PhotoEditor({ image, imageUrl, scene, onReset }: PhotoEd
   const removeBgRef = useRef(handleRemoveBackground);
   removeBgRef.current = handleRemoveBackground;
 
-  // 自动处理：进入编辑时如果选了场景，自动开始抠图+换底（不自动美颜）
+  // 自动处理：进入编辑时如果选了场景，自动美颜 + 抠图 + 换底
   useEffect(() => {
     if (autoStartedRef.current) return;
     if (!sceneRef.current) return;
 
     autoStartedRef.current = true;
-    removeBgRef.current();
+    // 先设置美颜状态，让 React 刷新后再启动抠图（确保 showBeauty=true 生效）
+    setBeauty({ smoothing: 50, spotHeal: 40, brightness: 25, sharpness: 30 });
+    setShowBeauty(true);
+    setTimeout(() => removeBgRef.current(), 50);
   }, []);
 
   // ---- 合成预览（依赖变化时自动重算） ----
