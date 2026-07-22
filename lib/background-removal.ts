@@ -13,11 +13,13 @@ import { removeBackground } from '@imgly/background-removal';
 
 export type RemoveBgCallback = (progress: number, status: string) => void;
 
-/** 使用的最轻量量化模型（42MB） */
-const DEFAULT_MODEL = 'isnet_quint8';
+/** 使用全精度 ISNet 模型（168MB，精度最高） */
+const DEFAULT_MODEL = 'isnet';
 
-/** 本地模型路径 */
-const LOCAL_MODEL_PATH = '/models/';
+/** 本地模型路径（必须是带 host 的绝对 URL，因为 imgly 内部用 new URL(base, path) 拼接） */
+const LOCAL_MODEL_PATH = typeof window !== 'undefined'
+  ? window.location.origin + '/models/'
+  : '/models/';
 
 /**
  * 检测本地模型 cache 是否可用
