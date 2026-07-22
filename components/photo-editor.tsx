@@ -495,6 +495,22 @@ export default function PhotoEditor({ image, imageUrl, scene, onReset }: PhotoEd
       {/* ====== 控制面板 ====== */}
       <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 space-y-6">
         {/* ---- 多阶段进度 ---- */}
+        {/* ---- 处理完成提示 ---- */}
+        {step === 'done' && (
+          <div className="bg-green-50 rounded-xl p-4 border border-green-200">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3 min-w-0">
+                <span className="text-2xl">✅</span>
+                <div className="min-w-0">
+                  <div className="font-medium text-green-800">处理完成</div>
+                  <div className="text-xs text-green-600 mt-0.5 truncate">{statusText}</div>
+                </div>
+              </div>
+              <span className="shrink-0 text-sm font-medium text-green-600 bg-green-100 px-3 py-1 rounded-full">100%</span>
+            </div>
+          </div>
+        )}
+
         {isProcessing && (
           <div className="bg-white rounded-xl border border-brand-100 overflow-hidden">
             {/* 阶段列表 */}
