@@ -25,7 +25,22 @@ interface PhotoEditorProps {
   onReset: () => void;
 }
 
-type ProcessingStep = 'idle' | 'downloading' | 'processing' | 'completing' | 'done' | 'error';
+type ProcessingStep = 'idle' | 'uploading' | 'downloading' | 'inference' | 'compositing' | 'done' | 'error';
+
+/** 处理阶段定义 */
+interface ProcessingStage {
+  key: ProcessingStep;
+  label: string;
+  detail: string;
+  icon: string;
+}
+
+const PROCESSING_STAGES: ProcessingStage[] = [
+  { key: 'uploading',   label: '上传照片',   detail: '正在上传到服务器...',   icon: '📤' },
+  { key: 'downloading', label: '下载 AI 模型', detail: '首次使用需下载 168MB 模型...', icon: '🧠' },
+  { key: 'inference',   label: 'AI 智能抠图', detail: '正在识别人物轮廓...',   icon: '✂️' },
+  { key: 'compositing', label: '合成效果',   detail: '正在合成预览图...',     icon: '🎨' },
+];
 
 export default function PhotoEditor({ image, imageUrl, scene, onReset }: PhotoEditorProps) {
   // ---- Core State ----
@@ -118,6 +133,7 @@ export default function PhotoEditor({ image, imageUrl, scene, onReset }: PhotoEd
   const [progress, setProgress] = useState(0);
   const [statusText, setStatusText] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [activeStageIndex, setActiveStageIndex] = useState(-1);
 
   // ---- 下载状态 ----
   const [downloading, setDownloading] = useState(false);
@@ -147,15 +163,16 @@ export default function PhotoEditor({ image, imageUrl, scene, onReset }: PhotoEd
     };
   }, []);
 
-  // ---- AI 抠图（在原始分辨率上处理，确保输出质量） ----
+  // ---- AI 抠图 ----
   const handleRemoveBackground = useCallback(async () => {
-    setStep('downloading');
+    setStep('uploading');
     setProgress(0);
     setError(null);
-    setStatusText('正在加载 AI 模型...');
+    setActiveStageIndex(0);
+    setStatusText('正在准备照片...');
 
     try {
-      // 如果美颜开着，先在原始分辨率上跑一次美颜，再抠图
+      // Stage 1: 准备照片（如果美颜开着先美颜）
       let sourceBlob;
       if (showBeauty) {
         setStatusText('正在应用美颜...');
@@ -174,21 +191,48 @@ export default function PhotoEditor({ image, imageUrl, scene, onReset }: PhotoEd
       } else {
         sourceBlob = await fetch(imageUrl).then((r) => r.blob());
       }
+      setProgress(30);
 
-      const blob = await removeImageBackground(sourceBlob, (pct, key) => {
-        setProgress(pct);
-        if (key === 'wasm') setStatusText('正在加载 AI 模型...');
-        else if (key === 'inference') setStatusText('正在识别人物轮廓...');
-        else setStatusText(`处理中 ${pct}%`);
+      // Stage 2: 抠图推理
+      setStep('inference');
+      setActiveStageIndex(2);
+      setStatusText('AI 正在识别人物轮廓...');
+
+      const blob = await removeImageBackground(sourceBlob, (pct, key, stage) => {
+        const mappedPct = 30 + Math.round(pct * 0.55);
+        setProgress(mappedPct);
+        // 根据 stage 参数切换进度阶段
+        if (stage === 'uploading') {
+          setActiveStageIndex(1);
+          setStatusText('正在上传照片到服务器...');
+        } else if (key === 'wasm' || stage === 'downloading') {
+          setActiveStageIndex(1);
+          setStatusText('正在加载 AI 模型...');
+        } else if (key === 'inference' || stage === 'inference') {
+          setActiveStageIndex(2);
+          setStatusText(`AI 正在抠图中 ${pct}%`);
+        } else if (key === 'done') {
+          setStatusText('抠图完成');
+        } else {
+          setStatusText(`处理中 ${pct}%`);
+        }
       });
+      setProgress(85);
+
+      // Stage 3: 合成预览
+      setStep('compositing');
+      setActiveStageIndex(3);
+      setStatusText('正在合成预览效果...');
+
       setPersonBlob(blob);
       setStep('done');
-      setStatusText('抠图完成 ✓');
+      setProgress(100);
+      setStatusText('✅ 完成');
     } catch (err) {
       console.error('抠图失败:', err);
       setStep('error');
       setError('背景移除失败，请尝试其他照片或重试');
-      setStatusText('处理失败');
+      setStatusText('❌ 处理失败');
     }
   }, [beautyUrl]);
 
@@ -205,27 +249,17 @@ export default function PhotoEditor({ image, imageUrl, scene, onReset }: PhotoEd
     if (!sceneRef.current) return;
 
     autoStartedRef.current = true;
-    setStatusText('正在处理中...');
-    setStep('downloading');
-    setProgress(2);
+    setStatusText('正在准备照片...');
+    setStep('uploading');
+    setActiveStageIndex(0);
+    setProgress(5);
 
-    // 模拟进度防卡死
-    let fakeProgress = 2;
-    const fakeTimer = setInterval(() => {
-      fakeProgress += 1.5 + Math.random() * 2;
-      if (fakeProgress < 85) {
-        setProgress((prev) => Math.max(prev, Math.round(fakeProgress)));
-      }
-    }, 600);
-
-    const timer = setTimeout(async () => {
-      clearInterval(fakeTimer);
+    const timer = setTimeout(() => {
       removeBgRef.current();
     }, 400);
 
     return () => {
       clearTimeout(timer);
-      clearInterval(fakeTimer);
     };
   }, []);
 
@@ -346,7 +380,7 @@ export default function PhotoEditor({ image, imageUrl, scene, onReset }: PhotoEd
   };
 
   // ---- 按钮状态 ----
-  const isProcessing = step === 'downloading' || step === 'processing';
+  const isProcessing = step === 'uploading' || step === 'downloading' || step === 'inference' || step === 'compositing';
   const hasPerson = personBlob !== null;
   const hasPreview = previewUrl !== null;
   const sizeInvalid = isCustom && (effectiveWidthPx < 10 || effectiveHeightPx < 10);
@@ -460,19 +494,62 @@ export default function PhotoEditor({ image, imageUrl, scene, onReset }: PhotoEd
 
       {/* ====== 控制面板 ====== */}
       <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 space-y-6">
-        {/* ---- 进度 / 错误 ---- */}
+        {/* ---- 多阶段进度 ---- */}
         {isProcessing && (
-          <div className="bg-brand-50 rounded-xl p-4">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-sm text-brand-700 flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-brand-500 animate-pulse" />
-                {statusText}
-              </span>
-              <span className="text-sm font-medium text-brand-600">{progress}%</span>
+          <div className="bg-white rounded-xl border border-brand-100 overflow-hidden">
+            {/* 阶段列表 */}
+            <div className="divide-y divide-brand-50">
+              {PROCESSING_STAGES.map((stage, i) => {
+                const isActive = activeStageIndex === i;
+                const isDone = i < activeStageIndex;
+
+                return (
+                  <div
+                    key={stage.key}
+                    className={`flex items-center gap-3 px-4 py-3 text-sm transition-colors ${
+                      isActive ? 'bg-brand-50' : isDone ? 'bg-green-50/50' : 'opacity-40'
+                    }`}
+                  >
+                    {/* 状态图标 */}
+                    <span className="shrink-0 w-6 h-6 flex items-center justify-center">
+                      {isDone ? (
+                        <span className="text-green-500">✅</span>
+                      ) : isActive ? (
+                        <svg className="animate-spin w-4 h-4 text-brand-600" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                        </svg>
+                      ) : (
+                        <span className="text-gray-300">⏳</span>
+                      )}
+                    </span>
+
+                    {/* 阶段名 */}
+                    <div className="min-w-0 flex-1">
+                      <div className={`font-medium ${isActive ? 'text-brand-700' : isDone ? 'text-gray-500' : 'text-gray-400'}`}>
+                        {stage.icon} {stage.label}
+                      </div>
+                      <div className={`text-xs ${isActive ? 'text-brand-500' : 'text-gray-400'}`}>
+                        {isActive ? statusText || stage.detail : isDone ? '已完成' : '等待中'}
+                      </div>
+                    </div>
+
+                    {/* 当前阶段进度 */}
+                    {isActive && (
+                      <span className="shrink-0 text-xs font-medium text-brand-600">{progress}%</span>
+                    )}
+                    {isDone && (
+                      <span className="shrink-0 text-xs text-green-500">完成</span>
+                    )}
+                  </div>
+                );
+              })}
             </div>
-            <div className="w-full h-2.5 bg-brand-100 rounded-full overflow-hidden">
+
+            {/* 总进度条 */}
+            <div className="h-1.5 bg-gray-100">
               <div
-                className="h-full bg-gradient-to-r from-brand-500 to-brand-400 rounded-full transition-all duration-300"
+                className="h-full bg-gradient-to-r from-brand-500 to-green-500 transition-all duration-500 ease-out"
                 style={{ width: `${progress}%` }}
               />
             </div>

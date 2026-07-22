@@ -11,7 +11,7 @@
 
 import { removeBackground as localRemoveBg } from '@imgly/background-removal';
 
-export type RemoveBgCallback = (progress: number, status: string) => void;
+export type RemoveBgCallback = (progress: number, status: string, stage?: string) => void;
 
 /** 使用全精度 ISNet 模型（168MB，精度最高） */
 const DEFAULT_MODEL = 'isnet';
@@ -66,9 +66,8 @@ async function removeImageBackgroundServer(
   const apiBase = getServerApiUrl();
   if (!apiBase) throw new Error('未配置云端 API 地址');
 
-  onProgress?.(5, '正在上传照片...');
+  onProgress?.(5, '正在上传照片...', 'uploading');
 
-  // 上传前先压缩到足够清晰但不太大
   const formData = new FormData();
   formData.append('image', imageBlob, 'photo.jpg');
 
@@ -87,10 +86,10 @@ async function removeImageBackgroundServer(
       throw new Error(detail);
     }
 
-    onProgress?.(80, '服务器抠图中...');
+    onProgress?.(80, '服务器抠图中...', 'inference');
 
     const resultBlob = await response.blob();
-    onProgress?.(100, '抠图完成 ✓');
+    onProgress?.(100, '抠图完成 ✓', 'inference');
 
     return resultBlob;
   } catch (err) {
