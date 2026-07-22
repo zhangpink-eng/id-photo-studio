@@ -4,24 +4,31 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import { TEMPLATES, renderTemplate } from '@/lib/preview-templates';
 
 interface PreviewTemplatesProps {
-  personBlob: Blob | null;
-  /** 预览图片 URL（没有 personBlob 时降级用）*/
-  fallbackUrl: string | null;
+  /** 成品预览 URL（带背景色的最终效果） */
+  previewUrl: string | null;
 }
 
-export default function PreviewTemplates({ personBlob, fallbackUrl }: PreviewTemplatesProps) {
+export default function PreviewTemplates({ previewUrl }: PreviewTemplatesProps) {
   const [selectedTemplate, setSelectedTemplate] = useState('plain');
   const [rendering, setRendering] = useState(false);
+  const [previewBlob, setPreviewBlob] = useState<Blob | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  const activeBlob = personBlob || (fallbackUrl ? null : null);
+  // previewUrl 变为 Blob
+  useEffect(() => {
+    if (!previewUrl) { setPreviewBlob(null); return; }
+    let cancelled = false;
+    fetch(previewUrl).then(r => r.blob()).then(blob => {
+      if (!cancelled) setPreviewBlob(blob);
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [previewUrl]);
 
   const renderPreview = useCallback(
     async (templateId: string) => {
       const canvas = canvasRef.current;
-      if (!canvas) return;
-      if (!personBlob) return;
+      if (!canvas || !previewBlob) return;
 
       setRendering(true);
       try {
@@ -30,37 +37,32 @@ export default function PreviewTemplates({ personBlob, fallbackUrl }: PreviewTem
           canvas.width = container.clientWidth;
           canvas.height = Math.round(canvas.width * 0.7);
         }
-        await renderTemplate(templateId, canvas, personBlob);
+        await renderTemplate(templateId, canvas, previewBlob);
       } catch (err) {
         console.error('模板渲染失败:', err);
       } finally {
         setRendering(false);
       }
     },
-    [personBlob],
+    [previewBlob],
   );
 
-  // 切换模板或 personBlob 变化时重新渲染
   useEffect(() => {
-    if (personBlob) renderPreview(selectedTemplate);
-  }, [selectedTemplate, personBlob, renderPreview]);
+    if (previewBlob) renderPreview(selectedTemplate);
+  }, [selectedTemplate, previewBlob, renderPreview]);
 
-  // 容器尺寸变化时重新渲染
   useEffect(() => {
     const container = containerRef.current;
-    if (!container || !personBlob) return;
-
-    const observer = new ResizeObserver(() => {
-      renderPreview(selectedTemplate);
-    });
+    if (!container || !previewBlob) return;
+    const observer = new ResizeObserver(() => renderPreview(selectedTemplate));
     observer.observe(container);
     return () => observer.disconnect();
-  }, [selectedTemplate, personBlob, renderPreview]);
+  }, [selectedTemplate, previewBlob, renderPreview]);
 
-  if (!personBlob) return null;
+  if (!previewUrl || !previewBlob) return null;
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
       <h3 className="text-sm font-medium text-gray-700 flex items-center gap-1.5">
         <span>🎭</span>
         场景预览

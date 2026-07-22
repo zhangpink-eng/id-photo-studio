@@ -972,12 +972,9 @@ export default function PhotoEditor({ image, imageUrl, scene, onReset }: PhotoEd
         )}
 
         {/* ---- 场景预览 ---- */}
-        {hasPerson && (
+        {hasPreview && (
           <div className="pt-2">
-            <PreviewTemplates
-              personBlob={personBlob}
-              fallbackUrl={previewUrl}
-            />
+            <PreviewTemplates previewUrl={previewUrl} />
           </div>
         )}
 
