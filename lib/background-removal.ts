@@ -16,11 +16,27 @@ export type RemoveBgCallback = (progress: number, status: string) => void;
 /** 使用量化 ISNet 模型（42MB，精度与全精度几乎无异，速度快 3-5 倍） */
 const DEFAULT_MODEL = 'isnet_quint8';
 
+/**
+ * 获取 NEXT_PUBLIC_* 环境变量（安全兼容浏览器端）
+ * Next.js 14 在构建时把 NEXT_PUBLIC_* 替换为实际值，
+ * 但如果未设置环境变量，DefinePlugin 可能留下 process.env 引用导致浏览器报错。
+ * 此函数安全兜底。
+ */
+function getPublicEnv(name: string): string | undefined {
+  try {
+    if (typeof process !== 'undefined' && process.env && process.env[name]) {
+      return process.env[name];
+    }
+  } catch {
+    // 浏览器端无 process，静默处理
+  }
+  return undefined;
+}
+
 /** 模型路径优先级：环境变量CDN > 本地静态目录 */
 function getModelBasePath(): string {
   if (typeof window === 'undefined') return '/models/';
-  // 生产环境：优先使用 CDN
-  const cdnUrl = process.env.NEXT_PUBLIC_MODEL_CDN_URL;
+  const cdnUrl = getPublicEnv('NEXT_PUBLIC_MODEL_CDN_URL');
   if (cdnUrl) return cdnUrl.replace(/\/+$/, '') + '/';
   // 开发/默认：使用本地静态目录（必须是绝对 URL，因为 imgly 内部用 new URL(base, path) 拼接）
   return window.location.origin + '/models/';
@@ -42,7 +58,7 @@ async function checkLocalModelAvailable(): Promise<boolean> {
 /** WASM CDN 路径 */
 function getWasmBasePath(): string {
   if (typeof window === 'undefined') return '/onnxruntime/';
-  const cdnUrl = process.env.NEXT_PUBLIC_MODEL_CDN_URL;
+  const cdnUrl = getPublicEnv('NEXT_PUBLIC_MODEL_CDN_URL');
   if (cdnUrl) return cdnUrl.replace(/\/+$/, '') + '/onnxruntime/';
   return window.location.origin + '/onnxruntime/';
 }
