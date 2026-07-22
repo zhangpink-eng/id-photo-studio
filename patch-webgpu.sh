@@ -62,11 +62,13 @@ if [ -f "$CACHE_DIR/resources.json" ]; then
   done
   quiet_echo "    ✅ $COPIED 个 chunk 文件就绪"
 else
-  quiet_echo "    ⚠️  模型缓存未找到，使用 CDN 回退"
-  quiet_echo "       提示: 运行 \`npm run download-models\` 下载模型到本地"
-  quiet_echo "       或设置 MODEL_CACHE_DIR 环境变量"
-  # 模型不在本地时，删掉 resources.json（避免空文件导致加载失败）
-  rm -f "$PUBLIC_MODELS/resources.json"
+  if [ -f "$PUBLIC_MODELS/resources.json" ]; then
+    quiet_echo "    ✅ 模型文件已就绪（已在 public/models/ 中）"
+  else
+    quiet_echo "    ⚠️  模型未本地化（将使用 CDN 回退）"
+    quiet_echo "       提示: 运行 \`npm run download-models\` 下载模型到本地"
+    quiet_echo "       或设置 MODEL_CACHE_DIR 环境变量"
+  fi
 fi
 
 # ==========================
