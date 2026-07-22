@@ -16,6 +16,11 @@
   .upload-zone.drag-over {
     @apply border-brand-400 bg-brand-50;
   }
+
+  /* 移动端按钮触摸优化 */
+  .touch-btn {
+    @apply min-h-[44px] min-w-[44px];
+  }
 }
 
 /* 平滑滚动 */
@@ -35,4 +40,20 @@ html {
 }
 ::-webkit-scrollbar-thumb:hover {
   @apply bg-gray-400;
+}
+
+/* 移动端滑块优化 — 增大触摸区域 */
+@media (max-width: 640px) {
+  input[type='range'] {
+    height: 32px !important;
+    padding: 8px 0;
+  }
+  input[type='range']::-webkit-slider-thumb {
+    width: 28px !important;
+    height: 28px !important;
+  }
+  input[type='range']::-moz-range-thumb {
+    width: 28px !important;
+    height: 28px !important;
+  }
 }

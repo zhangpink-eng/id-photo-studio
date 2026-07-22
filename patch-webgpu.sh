@@ -94,7 +94,19 @@ for MJS in "${!MAP[@]}"; do
   if [ ! -f "$JS_PATH" ] || [ ! -f "$MJS_PATH" ]; then continue; fi
   cp "$JS_PATH" "$MJS_PATH"
   VAR="ort"
-  sed -i '' "s|typeof exports==\"object\"&&typeof module==\"object\"&&(module\.exports=$VAR)|export default $VAR|" "$MJS_PATH"
+
+  # 跨平台：用 node 替换（兼容 macOS 和 Linux）
+  node -e "
+const fs = require('fs');
+const path = '$MJS_PATH';
+const varName = '$VAR';
+let content = fs.readFileSync(path, 'utf-8');
+content = content.replace(
+  new RegExp('typeof exports==\"object\"&&typeof module==\"object\"&&\\(module\\.exports=' + varName + '\\)', 'g'),
+  'export default ' + varName
+);
+fs.writeFileSync(path, content);
+" 2>/dev/null || true
   quiet_echo "    ✅ $MJS → export default $VAR"
 done
 
@@ -128,7 +140,7 @@ content = content.replace(
 changed = True
 
 # 2. 移除前面失败的 patch 产生的重复行（保证幂等性）
-WASMPATHS_LINE = 'ort2.env.wasm.wasmPaths = "/onnxruntime/";'
+WASMPATHS_LINE = 'ort2.env.wasm.wasmPaths = window.__WASM_PATH || "/onnxruntime/";'
 content = re.sub(rf'{re.escape(WASMPATHS_LINE)}\s*', '', content)
 
 # 3. 替换 WASM 的 CDN 加载块为本地路径
@@ -137,7 +149,7 @@ content = re.sub(rf'{re.escape(WASMPATHS_LINE)}\s*', '', content)
 #      const mjsPath = await loadAsUrl(`${baseFilePath}.mjs`, config);
 #      ort2.env.wasm.wasmPaths = { mjs: mjsPath, wasm: wasmPath };
 #    替换为：
-#      ort2.env.wasm.wasmPaths = "/onnxruntime/";
+#      ort2.env.wasm.wasmPaths = window.__WASM_PATH || "/onnxruntime/";
 OLD_BLOCKS = [
     r"""const wasmPath = await loadAsUrl(`${baseFilePath}.wasm`, config);
   const mjsPath = await loadAsUrl(`${baseFilePath}.mjs`, config);

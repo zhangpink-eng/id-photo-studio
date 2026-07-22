@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { removeImageBackground } from '@/lib/background-removal';
-import { compositeImage } from '@/lib/image-utils';
+import { compositeImage, loadImage } from '@/lib/image-utils';
 import {
   PHOTO_SIZES,
   BG_COLORS,
@@ -11,27 +11,105 @@ import {
   createGradient,
   type PhotoSize,
 } from '@/lib/constants';
+import { applyBeauty, type BeautyParams, DEFAULT_BEAUTY, BEAUTY_PRESETS } from '@/lib/beauty';
+import type { SceneConfig } from '@/lib/scenes';
+import LayoutEditor from '@/components/layout-editor';
+import CompliancePanel from '@/components/compliance-panel';
+import BatchGenerator from '@/components/batch-generator';
+import { addHistoryRecord, generateThumbnail } from '@/lib/history';
 
 interface PhotoEditorProps {
   image: File;
   imageUrl: string;
+  scene?: SceneConfig | null;
   onReset: () => void;
 }
 
 type ProcessingStep = 'idle' | 'downloading' | 'processing' | 'completing' | 'done' | 'error';
 
-export default function PhotoEditor({ image, imageUrl, onReset }: PhotoEditorProps) {
+export default function PhotoEditor({ image, imageUrl, scene, onReset }: PhotoEditorProps) {
   // ---- Core State ----
   const [personBlob, setPersonBlob] = useState<Blob | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
 
+  // ---- Beauty ----
+  const [beauty, setBeauty] = useState<BeautyParams>({ ...DEFAULT_BEAUTY });
+  const [beautyUrl, setBeautyUrl] = useState<string>(imageUrl);
+  const [showBeauty, setShowBeauty] = useState(false);
+  const beautyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // 应用美颜（带防抖）
+  useEffect(() => {
+    if (!showBeauty) {
+      setBeautyUrl(imageUrl);
+      return;
+    }
+
+    if (beautyTimerRef.current) clearTimeout(beautyTimerRef.current);
+
+    beautyTimerRef.current = setTimeout(async () => {
+      try {
+        const img = await loadImage(imageUrl);
+        // 缩小到最长边 800px 再做美颜（原始照片太大，全分辨率极卡）
+        const MAX_DIM = 800;
+        let w = img.naturalWidth, h = img.naturalHeight;
+        if (w > MAX_DIM || h > MAX_DIM) {
+          const ratio = MAX_DIM / Math.max(w, h);
+          w = Math.round(w * ratio);
+          h = Math.round(h * ratio);
+        }
+
+        const canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d')!;
+        ctx.drawImage(img, 0, 0, w, h);
+
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const processed = applyBeauty(imageData, beauty);
+        ctx.putImageData(processed, 0, 0);
+
+        canvas.toBlob((blob) => {
+          if (blob) {
+            const url = URL.createObjectURL(blob);
+            setBeautyUrl((prev) => {
+              if (prev !== imageUrl) URL.revokeObjectURL(prev);
+              return url;
+            });
+          }
+        }, 'image/jpeg', 0.92);
+      } catch (err) {
+        console.error('美颜处理失败:', err);
+      }
+    }, 200); // 200ms 防抖
+
+    return () => {
+      if (beautyTimerRef.current) clearTimeout(beautyTimerRef.current);
+    };
+  }, [showBeauty, beauty, imageUrl]);
+
+  // 清理 beautyUrl
+  useEffect(() => {
+    return () => {
+      if (beautyUrl !== imageUrl) URL.revokeObjectURL(beautyUrl);
+    };
+  }, [beautyUrl, imageUrl]);
+
   // ---- Background ----
-  const [bgColor, setBgColor] = useState(DEFAULT_BG_COLOR);
+  const [bgColor, setBgColor] = useState(
+    scene
+      ? BG_COLORS.find((c) => c.value === scene.bgColor)?.value || DEFAULT_BG_COLOR
+      : DEFAULT_BG_COLOR,
+  );
   const [customColor, setCustomColor] = useState('#4476C7');
   const [showCustomPicker, setShowCustomPicker] = useState(false);
 
   // ---- Size ----
-  const [selectedSize, setSelectedSize] = useState<PhotoSize>(PHOTO_SIZES[0]);
+  const [selectedSize, setSelectedSize] = useState<PhotoSize>(
+    scene
+      ? PHOTO_SIZES.find((s) => s.id === scene.sizeId) || PHOTO_SIZES[0]
+      : PHOTO_SIZES[0],
+  );
   const [customW, setCustomW] = useState(400);
   const [customH, setCustomH] = useState(500);
 
@@ -41,8 +119,10 @@ export default function PhotoEditor({ image, imageUrl, onReset }: PhotoEditorPro
   const [statusText, setStatusText] = useState('');
   const [error, setError] = useState<string | null>(null);
 
-  // ---- Download ----
+  // ---- 下载状态 ----
   const [downloading, setDownloading] = useState(false);
+  // ---- 下载模式: 'single' | 'layout' | 'batch' ----
+  const [downloadMode, setDownloadMode] = useState<'single' | 'layout' | 'batch'>('single');
 
   // ---- 实际生效的尺寸（自定义时覆盖） ----
   const isCustom = selectedSize.id === CUSTOM_SIZE_ID;
@@ -67,7 +147,7 @@ export default function PhotoEditor({ image, imageUrl, onReset }: PhotoEditorPro
     };
   }, []);
 
-  // ---- AI 抠图 ----
+  // ---- AI 抠图（在原始分辨率上处理，确保输出质量） ----
   const handleRemoveBackground = useCallback(async () => {
     setStep('downloading');
     setProgress(0);
@@ -75,7 +155,27 @@ export default function PhotoEditor({ image, imageUrl, onReset }: PhotoEditorPro
     setStatusText('正在加载 AI 模型...');
 
     try {
-      const blob = await removeImageBackground(image, (pct, key) => {
+      // 如果美颜开着，先在原始分辨率上跑一次美颜，再抠图
+      let sourceBlob;
+      if (showBeauty) {
+        setStatusText('正在应用美颜...');
+        const img = await loadImage(imageUrl);
+        const canvas = document.createElement('canvas');
+        canvas.width = img.naturalWidth;
+        canvas.height = img.naturalHeight;
+        const ctx = canvas.getContext('2d')!;
+        ctx.drawImage(img, 0, 0);
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const processed = applyBeauty(imageData, beauty);
+        ctx.putImageData(processed, 0, 0);
+        sourceBlob = await new Promise<Blob>((resolve) =>
+          canvas.toBlob((b) => resolve(b!), 'image/jpeg', 0.95)
+        );
+      } else {
+        sourceBlob = await fetch(imageUrl).then((r) => r.blob());
+      }
+
+      const blob = await removeImageBackground(sourceBlob, (pct, key) => {
         setProgress(pct);
         if (key === 'wasm') setStatusText('正在加载 AI 模型...');
         else if (key === 'inference') setStatusText('正在识别人物轮廓...');
@@ -90,7 +190,7 @@ export default function PhotoEditor({ image, imageUrl, onReset }: PhotoEditorPro
       setError('背景移除失败，请尝试其他照片或重试');
       setStatusText('处理失败');
     }
-  }, [image]);
+  }, [beautyUrl]);
 
   // ---- 合成预览（依赖变化时自动重算） ----
   useEffect(() => {
@@ -144,7 +244,6 @@ export default function PhotoEditor({ image, imageUrl, onReset }: PhotoEditorPro
     return () => {
       cancelled = true;
     };
-    // 对所有依赖都加上 —— 包括 effective 尺寸
   }, [personBlob, bgColor, customColor, effectiveWidthPx, effectiveHeightPx, updatePreviewUrl]);
 
   // ---- 下载 ----
@@ -165,13 +264,43 @@ export default function PhotoEditor({ image, imageUrl, onReset }: PhotoEditorPro
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
+
+      // 自动保存到历史记录（异步，不阻塞下载）
+      saveToHistory(blob);
     } catch (err) {
       console.error('下载失败:', err);
       setError('下载失败，请重试');
     } finally {
       setDownloading(false);
     }
-  }, [previewUrl, selectedSize, effectiveWidthPx, effectiveHeightPx, isCustom]);
+  }, [previewUrl, selectedSize, effectiveWidthPx, effectiveHeightPx, isCustom, imageUrl, scene]);
+
+  /** 自动保存到本地历史记录 */
+  const saveToHistory = useCallback(
+    async (resultBlob: Blob) => {
+      try {
+        const thumbnailDataUrl = await generateThumbnail(resultBlob);
+        // 原图也保存一个小型版本供回顾
+        const origResp = await fetch(imageUrl);
+        const origBlob = await origResp.blob();
+        await addHistoryRecord({
+          createdAt: new Date().toISOString(),
+          sceneName: scene?.name,
+          sizeName: isCustom ? `自定义 ${effectiveWidthPx}×${effectiveHeightPx}` : selectedSize.name,
+          widthPx: effectiveWidthPx,
+          heightPx: effectiveHeightPx,
+          bgColor: bgColor === 'custom' ? customColor : bgColor === 'gradient' ? '渐变蓝' : bgColor,
+          thumbnailDataUrl,
+          originalBlob: origBlob,
+          resultBlob,
+        });
+      } catch (err) {
+        // 静默失败——历史记录保存失败不应中断用户体验
+        console.warn('历史记录保存失败:', err);
+      }
+    },
+    [imageUrl, scene, selectedSize, isCustom, effectiveWidthPx, effectiveHeightPx, bgColor, customColor],
+  );
 
   // ---- 背景色按钮点击 ----
   const handleBgSelect = (value: string) => {
@@ -187,23 +316,59 @@ export default function PhotoEditor({ image, imageUrl, onReset }: PhotoEditorPro
 
   return (
     <div className="space-y-8">
+      {/* ====== 场景提示条 ====== */}
+      {scene && (
+        <div className="bg-gradient-to-r from-brand-50 to-blue-50 rounded-2xl border border-brand-100 p-4">
+          <div className="flex items-start gap-3">
+            <span className="text-xl shrink-0">{scene.icon}</span>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2 mb-1">
+                <span className="font-semibold text-gray-800">{scene.name}</span>
+                <span className="text-xs bg-white/80 text-brand-600 px-2 py-0.5 rounded-full border border-brand-200">
+                  {scene.sizeId} · {scene.bgColor === '#FFFFFF' ? '白底' : scene.bgColor === '#4476C7' ? '蓝底' : scene.bgColor === '#E53935' ? '红底' : '自定义底色'}
+                </span>
+              </div>
+              <div className="flex flex-wrap gap-1">
+                {scene.tips.slice(0, 4).map((tip) => (
+                  <span key={tip} className="text-xs text-gray-500 bg-white/60 px-2 py-0.5 rounded-full">
+                    {tip}
+                  </span>
+                ))}
+                {scene.tips.length > 4 && (
+                  <span className="text-xs text-gray-400">+{scene.tips.length - 4}</span>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ====== 图片展示区 ====== */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* 原始照片 */}
+        {/* 原始照片 / 美颜预览 */}
         <div className="bg-white rounded-2xl p-4 shadow-sm border border-gray-100">
           <div className="flex items-center justify-between mb-3">
-            <h3 className="text-sm font-medium text-gray-500 flex items-center gap-1.5">
-              <span className="w-2 h-2 rounded-full bg-gray-400" />
-              原始照片
-            </h3>
-            <span className="text-xs text-gray-400">
-              {image.name.replace(/^(.{20}).*$/, '$1…')}
-            </span>
+            <div className="flex items-center gap-1.5">
+              <span className={`w-2 h-2 rounded-full ${showBeauty ? 'bg-pink-400' : 'bg-gray-400'}`} />
+              <h3 className="text-sm font-medium text-gray-500">
+                {showBeauty ? '美颜预览' : '原始照片'}
+              </h3>
+            </div>
+            <button
+              onClick={() => setShowBeauty(!showBeauty)}
+              className={`text-xs px-3 py-1 rounded-full transition-all ${
+                showBeauty
+                  ? 'bg-pink-100 text-pink-600'
+                  : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+              }`}
+            >
+              {showBeauty ? '美颜 ON' : '美颜 OFF'}
+            </button>
           </div>
           <div className="aspect-[3/4] relative overflow-hidden rounded-xl bg-gray-100">
             <img
-              src={imageUrl}
-              alt="原始照片"
+              src={beautyUrl}
+              alt={showBeauty ? '美颜后' : '原始照片'}
               className="w-full h-full object-contain"
             />
           </div>
@@ -277,6 +442,142 @@ export default function PhotoEditor({ image, imageUrl, onReset }: PhotoEditorPro
           </div>
         )}
 
+        {/* ---- 美颜 ---- */}
+        {showBeauty && (
+          <div className="bg-gradient-to-r from-pink-50 to-rose-50 rounded-xl p-5 border border-pink-100">
+            <label className="block text-sm font-medium text-gray-700 mb-4">
+              ✨ 美颜参数 <span className="text-gray-400 font-normal">— 拖动滑块实时预览效果</span>
+            </label>
+
+            {/* 美颜预设 */}
+            <div className="mb-5 pb-5 border-b border-pink-100">
+              <div className="flex items-center justify-between mb-2.5">
+                <span className="text-xs font-medium text-gray-500">快速预设</span>
+                <button
+                  onClick={() => {
+                    const preset = BEAUTY_PRESETS.find((p) => p.id === 'fresh')!;
+                    setBeauty({ ...preset.params });
+                  }}
+                  className="text-xs text-brand-600 hover:text-brand-700 font-medium"
+                >
+                  🤖 一键美颜
+                </button>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {BEAUTY_PRESETS.map((preset) => (
+                  <button
+                    key={preset.id}
+                    onClick={() => setBeauty({ ...preset.params })}
+                    className={`touch-btn px-3.5 py-2 rounded-lg text-xs font-medium transition-all border ${
+                      beauty.smoothing === preset.params.smoothing &&
+                      beauty.spotHeal === preset.params.spotHeal &&
+                      beauty.brightness === preset.params.brightness &&
+                      beauty.sharpness === preset.params.sharpness
+                        ? 'bg-white border-pink-300 text-pink-700 shadow-sm'
+                        : 'bg-white/60 border-pink-100 text-gray-600 hover:bg-white hover:border-pink-200'
+                    }`}
+                    title={preset.description}
+                  >
+                    {preset.icon} {preset.name}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* 去痘印 */}
+            <div className="mb-5">
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="text-sm text-gray-600">去痘印</span>
+                <span className="text-sm font-medium text-red-500">{beauty.spotHeal}%</span>
+              </div>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                value={beauty.spotHeal}
+                onChange={(e) => setBeauty((prev) => ({ ...prev, spotHeal: Number(e.target.value) }))}
+                className="w-full h-2 bg-red-100 rounded-full appearance-none cursor-pointer
+                  [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-5 [&::-webkit-slider-thumb]:h-5
+                  [&::-webkit-slider-thumb]:bg-red-400 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:shadow-md
+                  [&::-webkit-slider-thumb]:cursor-pointer"
+              />
+              <div className="flex justify-between text-xs text-gray-400 mt-1">
+                <span>关闭</span>
+                <span>强力去印</span>
+              </div>
+            </div>
+
+            {/* 磨皮 */}
+            <div className="mb-5">
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="text-sm text-gray-600">平滑皮肤</span>
+                <span className="text-sm font-medium text-pink-600">{beauty.smoothing}%</span>
+              </div>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                value={beauty.smoothing}
+                onChange={(e) => setBeauty((prev) => ({ ...prev, smoothing: Number(e.target.value) }))}
+                className="w-full h-2 bg-pink-100 rounded-full appearance-none cursor-pointer
+                  [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-5 [&::-webkit-slider-thumb]:h-5
+                  [&::-webkit-slider-thumb]:bg-pink-500 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:shadow-md
+                  [&::-webkit-slider-thumb]:cursor-pointer"
+              />
+              <div className="flex justify-between text-xs text-gray-400 mt-1">
+                <span>自然</span>
+                <span>柔和</span>
+              </div>
+            </div>
+
+            {/* 提亮 */}
+            <div>
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="text-sm text-gray-600">提亮肤色</span>
+                <span className="text-sm font-medium text-amber-600">{beauty.brightness}%</span>
+              </div>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                value={beauty.brightness}
+                onChange={(e) => setBeauty((prev) => ({ ...prev, brightness: Number(e.target.value) }))}
+                className="w-full h-2 bg-amber-100 rounded-full appearance-none cursor-pointer
+                  [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-5 [&::-webkit-slider-thumb]:h-5
+                  [&::-webkit-slider-thumb]:bg-amber-400 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:shadow-md
+                  [&::-webkit-slider-thumb]:cursor-pointer"
+              />
+              <div className="flex justify-between text-xs text-gray-400 mt-1">
+                <span>自然</span>
+                <span>明亮</span>
+              </div>
+            </div>
+
+            {/* 清晰度 */}
+            <div className="mt-5">
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="text-sm text-gray-600">清晰度</span>
+                <span className="text-sm font-medium text-sky-600">{beauty.sharpness}%</span>
+              </div>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                value={beauty.sharpness}
+                onChange={(e) => setBeauty((prev) => ({ ...prev, sharpness: Number(e.target.value) }))}
+                className="w-full h-2 bg-sky-100 rounded-full appearance-none cursor-pointer
+                  [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-5 [&::-webkit-slider-thumb]:h-5
+                  [&::-webkit-slider-thumb]:bg-sky-500 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:shadow-md
+                  [&::-webkit-slider-thumb]:cursor-pointer"
+              />
+              <div className="flex justify-between text-xs text-gray-400 mt-1">
+                <span>柔和</span>
+                <span>锐利</span>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* ---- 背景色 ---- */}
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-3">
@@ -299,7 +600,7 @@ export default function PhotoEditor({ image, imageUrl, onReset }: PhotoEditorPro
                 <button
                   key={c.value}
                   onClick={() => handleBgSelect(c.value)}
-                  className={`relative w-10 h-10 rounded-full border-2 transition-all shrink-0 ${
+                  className={`relative w-10 h-10 sm:w-10 sm:h-10 rounded-full border-2 transition-all shrink-0 ${
                     isActive
                       ? 'border-brand-500 scale-110 shadow-md'
                       : 'border-gray-200 hover:scale-105 hover:border-gray-300'
@@ -338,7 +639,7 @@ export default function PhotoEditor({ image, imageUrl, onReset }: PhotoEditorPro
                 <button
                   key={size.id}
                   onClick={() => setSelectedSize(size)}
-                  className={`px-4 py-2.5 rounded-xl text-sm font-medium transition-all ${
+                  className={`touch-btn px-4 py-2.5 rounded-xl text-sm font-medium transition-all ${
                     isActive
                       ? 'bg-brand-600 text-white shadow-md shadow-brand-200'
                       : 'bg-gray-50 text-gray-600 hover:bg-gray-100 border border-gray-200'
@@ -396,70 +697,116 @@ export default function PhotoEditor({ image, imageUrl, onReset }: PhotoEditorPro
           )}
         </div>
 
+        {/* ---- 合规检测 ---- */}
+        {hasPreview && (
+          <div className="pt-2">
+            <CompliancePanel
+              previewUrl={previewUrl}
+              sceneName={scene?.name}
+              minSize={{ width: effectiveWidthPx, height: effectiveHeightPx }}
+            />
+          </div>
+        )}
+
         {/* ---- 操作按钮 ---- */}
-        <div className="flex flex-wrap items-center gap-3 pt-2 border-t border-gray-100">
-          {/* 抠图按钮 */}
-          <button
-            onClick={handleRemoveBackground}
-            disabled={isProcessing}
-            className={`px-6 py-3 rounded-xl font-medium transition-all flex items-center gap-2 ${
-              isProcessing
-                ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
-                : hasPerson
-                  ? 'bg-amber-50 text-amber-700 hover:bg-amber-100 border border-amber-200'
-                  : 'bg-brand-600 text-white hover:bg-brand-700 shadow-lg shadow-brand-200'
-            }`}
-          >
-            {isProcessing ? (
-              <>
-                <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                </svg>
-                {progress}%
-              </>
-            ) : hasPerson ? (
-              '🔄 重新抠图'
-            ) : (
-              '✨ AI 智能抠图'
-            )}
-          </button>
+        <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-gray-100">
+          {/* 下载模式切换 */}
+          {hasPerson && (
+            <div className="w-full mb-2 flex items-center gap-1 bg-gray-100 rounded-xl p-0.5">
+              <button
+                onClick={() => setDownloadMode('single')}
+                className={`flex-1 touch-btn px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                  downloadMode === 'single'
+                    ? 'bg-white text-gray-800 shadow-sm'
+                    : 'text-gray-500 hover:text-gray-700'
+                }`}
+              >
+                📄 单张
+              </button>
+              <button
+                onClick={() => setDownloadMode('layout')}
+                className={`flex-1 touch-btn px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                  downloadMode === 'layout'
+                    ? 'bg-white text-gray-800 shadow-sm'
+                    : 'text-gray-500 hover:text-gray-700'
+                }`}
+              >
+                🖨️ 排版
+              </button>
+              <button
+                onClick={() => setDownloadMode('batch')}
+                className={`flex-1 touch-btn px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                  downloadMode === 'batch'
+                    ? 'bg-white text-gray-800 shadow-sm'
+                    : 'text-gray-500 hover:text-gray-700'
+                }`}
+              >
+                📦 批量
+              </button>
+            </div>
+          )}
 
-          {/* 下载按钮 */}
-          <button
-            onClick={handleDownload}
-            disabled={!hasPreview || downloading || sizeInvalid}
-            className={`px-6 py-3 rounded-xl font-medium transition-all flex items-center gap-2 ${
-              hasPreview && !downloading && !sizeInvalid
-                ? 'bg-green-600 text-white hover:bg-green-700 shadow-lg shadow-green-200'
-                : 'bg-gray-200 text-gray-400 cursor-not-allowed'
-            }`}
-          >
-            {downloading ? (
-              <>
-                <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                </svg>
-                下载中...
-              </>
-            ) : (
-              '📥 下载证件照'
-            )}
-          </button>
-
-          {/* 重新上传 */}
-          <button
-            onClick={onReset}
-            className="px-6 py-3 rounded-xl font-medium bg-gray-50 text-gray-600 hover:bg-gray-100 border border-gray-200 transition-all"
-          >
-            🔄 重新上传
-          </button>
+          {/* 单张下载模式 */}
+          {downloadMode === 'single' && (
+            <>
+              <button
+                onClick={handleDownload}
+                disabled={!hasPreview || sizeInvalid}
+                className={`touch-btn px-6 py-3 rounded-xl font-medium transition-all flex items-center gap-2 ${
+                  hasPreview && !sizeInvalid
+                    ? 'bg-green-600 text-white hover:bg-green-700 shadow-lg shadow-green-200'
+                    : 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                }`}
+              >
+                📥 下载证件照
+              </button>
+              <button
+                onClick={onReset}
+                className="touch-btn px-6 py-3 rounded-xl font-medium bg-gray-50 text-gray-600 hover:bg-gray-100 border border-gray-200 transition-all"
+              >
+                🔄 重新上传
+              </button>
+            </>
+          )}
 
           {statusText && step !== 'done' && !isProcessing && (
             <span className="text-sm text-gray-400">{statusText}</span>
           )}
         </div>
+
+        {/* 排版打印区域 */}
+        {hasPerson && downloadMode === 'layout' && (
+          <div className="border-t border-gray-100 pt-4">
+            <LayoutEditor
+              personBlob={personBlob}
+              cellSizePx={{ width: effectiveWidthPx, height: effectiveHeightPx }}
+              cellSizeMm={{ width: isCustom ? (effectiveWidthPx / 300 * 25.4) : selectedSize.widthMm, height: isCustom ? (effectiveHeightPx / 300 * 25.4) : selectedSize.heightMm }}
+              fillStyle={bgColor === 'custom' ? customColor : bgColor}
+              onDownload={(blob, label) => {
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `证件照排版_${label}.png`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+              }}
+            />
+          </div>
+        )}
+
+        {/* 批量生成区域 */}
+        {hasPerson && downloadMode === 'batch' && (
+          <div className="border-t border-gray-100 pt-4">
+            <BatchGenerator
+              personBlob={personBlob}
+              bgColor={bgColor}
+              customColor={customColor}
+              defaultSelected={scene ? [scene.sizeId] : undefined}
+            />
+          </div>
+        )}
       </div>
     </div>
   );

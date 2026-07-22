@@ -16,10 +16,15 @@ export type RemoveBgCallback = (progress: number, status: string) => void;
 /** 使用全精度 ISNet 模型（168MB，精度最高） */
 const DEFAULT_MODEL = 'isnet';
 
-/** 本地模型路径（必须是带 host 的绝对 URL，因为 imgly 内部用 new URL(base, path) 拼接） */
-const LOCAL_MODEL_PATH = typeof window !== 'undefined'
-  ? window.location.origin + '/models/'
-  : '/models/';
+/** 模型路径优先级：环境变量CDN > 本地静态目录 */
+function getModelBasePath(): string {
+  if (typeof window === 'undefined') return '/models/';
+  // 生产环境：优先使用 CDN
+  const cdnUrl = process.env.NEXT_PUBLIC_MODEL_CDN_URL;
+  if (cdnUrl) return cdnUrl.replace(/\/+$/, '') + '/';
+  // 开发/默认：使用本地静态目录（必须是绝对 URL，因为 imgly 内部用 new URL(base, path) 拼接）
+  return window.location.origin + '/models/';
+}
 
 /**
  * 检测本地模型 cache 是否可用
@@ -27,11 +32,19 @@ const LOCAL_MODEL_PATH = typeof window !== 'undefined'
 async function checkLocalModelAvailable(): Promise<boolean> {
   if (typeof window === 'undefined') return false;
   try {
-    const resp = await fetch(`${LOCAL_MODEL_PATH}resources.json`, { method: 'HEAD' });
+    const resp = await fetch(`${getModelBasePath()}resources.json`, { method: 'HEAD' });
     return resp.ok;
   } catch {
     return false;
   }
+}
+
+/** WASM CDN 路径 */
+function getWasmBasePath(): string {
+  if (typeof window === 'undefined') return '/onnxruntime/';
+  const cdnUrl = process.env.NEXT_PUBLIC_MODEL_CDN_URL;
+  if (cdnUrl) return cdnUrl.replace(/\/+$/, '') + '/onnxruntime/';
+  return window.location.origin + '/onnxruntime/';
 }
 
 /**
@@ -47,9 +60,14 @@ export async function removeImageBackground(
   onProgress?.(5, localAvailable ? '模型就绪' : '正在加载 AI 模型...');
 
   try {
+    // 设置 WASM 运行时路径（patch 后的 @imgly 会读这个值）
+    if (typeof window !== 'undefined') {
+      (window as any).__WASM_PATH = getWasmBasePath();
+    }
+
     const result = await removeBackground(imageBlob, {
       ...(localAvailable && {
-        publicPath: LOCAL_MODEL_PATH,
+        publicPath: getModelBasePath(),
       }),
       model: DEFAULT_MODEL,
       progress: (key: string, current: number, total: number) => {
