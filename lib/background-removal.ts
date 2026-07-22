@@ -17,27 +17,19 @@ export type RemoveBgCallback = (progress: number, status: string, stage?: string
 const DEFAULT_MODEL = 'isnet';
 
 /**
- * 获取 NEXT_PUBLIC_* 环境变量（安全兼容浏览器端）
+ * 云端 API 地址（编译时被 Next.js 替换）
+ * 在浏览器端 process 不存在，try/catch 兜底返回 undefined
  */
-function getPublicEnv(name: string): string | undefined {
-  try {
-    if (typeof process !== 'undefined' && process.env && process.env[name]) {
-      return process.env[name];
-    }
-  } catch {
-    // 浏览器端无 process
-  }
-  return undefined;
-}
+let REMOVE_BG_API: string | undefined;
+try { REMOVE_BG_API = process.env.NEXT_PUBLIC_REMOVE_BG_API; } catch {}
 
 /**
  * 判断是否使用云端 API 模式
  */
 function isServerMode(): boolean {
-  const apiUrl = getPublicEnv('NEXT_PUBLIC_REMOVE_BG_API');
-  if (apiUrl && apiUrl.length > 0) return true;
+  if (REMOVE_BG_API && REMOVE_BG_API.length > 0) return true;
 
-  // 也支持 URL 查询参数覆盖（例如临时切服务器模式）
+  // URL 参数覆盖（加 ?server=1 临时切服务器模式）
   if (typeof window !== 'undefined') {
     const params = new URLSearchParams(window.location.search);
     if (params.get('server') === '1') return true;
@@ -50,8 +42,7 @@ function isServerMode(): boolean {
  * 获取云端 API 地址
  */
 function getServerApiUrl(): string {
-  const apiUrl = getPublicEnv('NEXT_PUBLIC_REMOVE_BG_API');
-  if (apiUrl) return apiUrl.replace(/\/+$/, '');
+  if (REMOVE_BG_API) return REMOVE_BG_API.replace(/\/+$/, '');
   return '';
 }
 
@@ -68,8 +59,37 @@ async function removeImageBackgroundServer(
 
   onProgress?.(5, '正在上传照片...', 'uploading');
 
+  // 上传前压缩到最长边 1500px（减少上传时间，服务端推理也会 resize 到 1024）
+  let uploadBlob = imageBlob;
+  if (typeof document !== 'undefined') {
+    try {
+      const img = new Image();
+      await new Promise<void>((resolve, reject) => {
+        img.onload = () => resolve();
+        img.onerror = reject;
+        img.src = URL.createObjectURL(imageBlob);
+      });
+      const MAX_DIM = 1500;
+      let w = img.naturalWidth, h = img.naturalHeight;
+      if (w > MAX_DIM || h > MAX_DIM) {
+        const ratio = MAX_DIM / Math.max(w, h);
+        w = Math.round(w * ratio);
+        h = Math.round(h * ratio);
+        const canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d')!;
+        ctx.drawImage(img, 0, 0, w, h);
+        uploadBlob = await new Promise<Blob>(resolve =>
+          canvas.toBlob(b => resolve(b!), 'image/jpeg', 0.9)
+        );
+        console.log(`[抠图] 压缩图片: ${(imageBlob.size / 1024).toFixed(0)}KB → ${(uploadBlob.size / 1024).toFixed(0)}KB`);
+      }
+    } catch {}
+  }
+
   const formData = new FormData();
-  formData.append('image', imageBlob, 'photo.jpg');
+  formData.append('image', uploadBlob, 'photo.jpg');
 
   try {
     const response = await fetch(`${apiBase}/api/remove-bg`, {
@@ -107,8 +127,11 @@ async function removeImageBackgroundServer(
 /** 模型路径 */
 function getModelBasePath(): string {
   if (typeof window === 'undefined') return '/models/';
-  const cdnUrl = getPublicEnv('NEXT_PUBLIC_MODEL_CDN_URL');
-  if (cdnUrl) return cdnUrl.replace(/\/+$/, '') + '/';
+  try {
+    // Next.js 编译时把 NEXT_PUBLIC_* 替换为实际值
+    const cdnUrl = process.env.NEXT_PUBLIC_MODEL_CDN_URL;
+    if (cdnUrl) return cdnUrl.replace(/\/+$/, '') + '/';
+  } catch {}
   return window.location.origin + '/models/';
 }
 
@@ -126,8 +149,10 @@ async function checkLocalModelAvailable(): Promise<boolean> {
 /** WASM 路径 */
 function getWasmBasePath(): string {
   if (typeof window === 'undefined') return '/onnxruntime/';
-  const cdnUrl = getPublicEnv('NEXT_PUBLIC_MODEL_CDN_URL');
-  if (cdnUrl) return cdnUrl.replace(/\/+$/, '') + '/onnxruntime/';
+  try {
+    const cdnUrl = process.env.NEXT_PUBLIC_MODEL_CDN_URL;
+    if (cdnUrl) return cdnUrl.replace(/\/+$/, '') + '/onnxruntime/';
+  } catch {}
   return window.location.origin + '/onnxruntime/';
 }
 

@@ -36,10 +36,9 @@ interface ProcessingStage {
 }
 
 const PROCESSING_STAGES: ProcessingStage[] = [
-  { key: 'uploading',   label: '上传照片',   detail: '正在上传到服务器...',   icon: '📤' },
-  { key: 'downloading', label: '下载 AI 模型', detail: '首次使用需下载 168MB 模型...', icon: '🧠' },
-  { key: 'inference',   label: 'AI 智能抠图', detail: '正在识别人物轮廓...',   icon: '✂️' },
-  { key: 'compositing', label: '合成效果',   detail: '正在合成预览图...',     icon: '🎨' },
+  { key: 'uploading',   label: '正在上传到服务器', detail: '上传照片到服务器处理...',     icon: '📤' },
+  { key: 'inference',   label: 'AI 智能抠图',     detail: '服务器正在识别处理人物轮廓...', icon: '✂️' },
+  { key: 'compositing', label: '合成效果',         detail: '正在合成预览图...',           icon: '🎨' },
 ];
 
 export default function PhotoEditor({ image, imageUrl, scene, onReset }: PhotoEditorProps) {
@@ -166,16 +165,15 @@ export default function PhotoEditor({ image, imageUrl, scene, onReset }: PhotoEd
   // ---- AI 抠图 ----
   const handleRemoveBackground = useCallback(async () => {
     setStep('uploading');
-    setProgress(0);
     setError(null);
     setActiveStageIndex(0);
+    setProgress(5);
     setStatusText('正在准备照片...');
 
     try {
-      // Stage 1: 准备照片（如果美颜开着先美颜）
+      // Stage 0: 准备照片
       let sourceBlob;
       if (showBeauty) {
-        setStatusText('正在应用美颜...');
         const img = await loadImage(imageUrl);
         const canvas = document.createElement('canvas');
         canvas.width = img.naturalWidth;
@@ -191,25 +189,19 @@ export default function PhotoEditor({ image, imageUrl, scene, onReset }: PhotoEd
       } else {
         sourceBlob = await fetch(imageUrl).then((r) => r.blob());
       }
-      setProgress(30);
+      setProgress(15);
 
-      // Stage 2: 抠图推理
+      // Stage 1: 抠图推理（调用服务器或本地 AI）
       setStep('inference');
-      setActiveStageIndex(2);
-      setStatusText('AI 正在识别人物轮廓...');
+      setActiveStageIndex(1);
+      setStatusText('正在上传到服务器处理...');
 
       const blob = await removeImageBackground(sourceBlob, (pct, key, stage) => {
-        const mappedPct = 30 + Math.round(pct * 0.55);
+        const mappedPct = 15 + Math.round(pct * 0.7);
         setProgress(mappedPct);
-        // 根据 stage 参数切换进度阶段
-        if (stage === 'uploading') {
-          setActiveStageIndex(1);
+        if (stage === 'uploading' || key === 'uploading') {
           setStatusText('正在上传照片到服务器...');
-        } else if (key === 'wasm' || stage === 'downloading') {
-          setActiveStageIndex(1);
-          setStatusText('正在加载 AI 模型...');
         } else if (key === 'inference' || stage === 'inference') {
-          setActiveStageIndex(2);
           setStatusText(`AI 正在抠图中 ${pct}%`);
         } else if (key === 'done') {
           setStatusText('抠图完成');
@@ -219,10 +211,10 @@ export default function PhotoEditor({ image, imageUrl, scene, onReset }: PhotoEd
       });
       setProgress(85);
 
-      // Stage 3: 合成预览
+      // Stage 2: 合成预览
       setStep('compositing');
-      setActiveStageIndex(3);
-      setStatusText('正在合成预览效果...');
+      setActiveStageIndex(2);
+      setStatusText('正在合成效果...');
 
       setPersonBlob(blob);
       setStep('done');
@@ -249,18 +241,7 @@ export default function PhotoEditor({ image, imageUrl, scene, onReset }: PhotoEd
     if (!sceneRef.current) return;
 
     autoStartedRef.current = true;
-    setStatusText('正在准备照片...');
-    setStep('uploading');
-    setActiveStageIndex(0);
-    setProgress(5);
-
-    const timer = setTimeout(() => {
-      removeBgRef.current();
-    }, 400);
-
-    return () => {
-      clearTimeout(timer);
-    };
+    removeBgRef.current();
   }, []);
 
   // ---- 合成预览（依赖变化时自动重算） ----
