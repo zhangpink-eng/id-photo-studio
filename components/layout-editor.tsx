@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, useRef, useEffect } from 'react';
 import {
   PAPER_SIZES,
   calculateLayout,
@@ -30,6 +30,7 @@ export default function LayoutEditor({
   const [spacing, setSpacing] = useState(3);
   const [showCropMarks, setShowCropMarks] = useState(false);
   const [rendering, setRendering] = useState(false);
+  const [cellThumbUrl, setCellThumbUrl] = useState<string | null>(null);
 
   const layoutConfig: LayoutConfig = useMemo(
     () => ({
@@ -78,6 +79,29 @@ export default function LayoutEditor({
   }, [personBlob, fillStyle, layoutConfig, cellSizePx, onDownload, summaryText]);
 
   const paperAspect = paperInfo ? paperInfo.widthMm / paperInfo.heightMm : 1;
+
+  // ---- 渲染一张缩略图供排版预览使用 ----
+  useEffect(() => {
+    if (!personBlob) return;
+    const canvas = document.createElement('canvas');
+    const PH = 150;
+    const PW = Math.round(PH * (cellSizePx.width / cellSizePx.height));
+    canvas.width = PW;
+    canvas.height = PH;
+    const ctx = canvas.getContext('2d')!;
+    ctx.fillStyle = typeof fillStyle === 'string' ? fillStyle : '#4476C7';
+    ctx.fillRect(0, 0, PW, PH);
+
+    const img = new Image();
+    img.onload = () => {
+      const scale = Math.max(PW / img.naturalWidth, PH / img.naturalHeight);
+      ctx.drawImage(img, (PW - img.naturalWidth * scale) / 2, (PH - img.naturalHeight * scale) / 2, img.naturalWidth * scale, img.naturalHeight * scale);
+      setCellThumbUrl(canvas.toDataURL('image/png'));
+    };
+    const url = URL.createObjectURL(personBlob);
+    img.src = url;
+    return () => URL.revokeObjectURL(url);
+  }, [personBlob, fillStyle, cellSizePx]);
 
   return (
     <div className="space-y-6">
@@ -178,20 +202,22 @@ export default function LayoutEditor({
             {/* 纸张底色 */}
             <div className="absolute inset-0 bg-gray-50" />
 
-            {/* 排版单元格 */}
+            {/* 排版单元格 — 每格显示实际照片 */}
             {layoutResult.cells.map((cell, i) => (
               <div
                 key={i}
-                className="absolute flex items-center justify-center bg-white border border-gray-300 text-gray-400"
+                className="absolute"
                 style={{
                   left: `${(cell.x / paperInfo.widthMm) * 100}%`,
                   top: `${(cell.y / paperInfo.heightMm) * 100}%`,
                   width: `${(cell.w / paperInfo.widthMm) * 100}%`,
                   height: `${(cell.h / paperInfo.heightMm) * 100}%`,
+                  backgroundImage: cellThumbUrl ? `url(${cellThumbUrl})` : undefined,
+                  backgroundSize: 'cover',
+                  backgroundPosition: 'center',
+                  backgroundColor: '#f0f0f0',
                 }}
-              >
-                <span className="text-[clamp(6px,1.5vw,14px)]">📷</span>
-              </div>
+              />
             ))}
 
             {/* 裁切线 */}
