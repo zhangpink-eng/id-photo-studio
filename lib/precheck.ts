@@ -116,23 +116,24 @@ function checkResolution(w: number, h: number): PrecheckItem {
 
 function checkOrientation(w: number, h: number): PrecheckItem {
   // 证件照应该是竖拍（高 > 宽）
-  if (h < w) {
+  const ratio = Math.max(w, h) / Math.min(w, h);
+  if (h < w && ratio > 1.3) {
+    // 明显横拍（宽明显大于高）
     return {
       id: 'orientation',
       name: '拍摄方向',
       level: 'warn',
-      message: '照片是横拍的，证件照建议竖拍',
-      suggestion: '请使用竖屏半身照，效果更好',
+      message: '照片是横拍的，证件照建议竖拍半身照',
+      suggestion: '用手机竖屏拍摄，头顶留白，面部居中',
     };
   }
-  // 太正方形（高/宽 < 1.1）
-  if (h / w < 1.1) {
+  // 接近正方形的照片用 warn（但不要写"建议竖拍"这种可能错误的提示）
+  if (ratio < 1.15) {
     return {
       id: 'orientation',
-      name: '拍摄方向',
-      level: 'warn',
-      message: '照片接近正方形，建议竖屏半身照',
-      suggestion: '证件照建议头顶上方留白，人物居中',
+      name: '照片比例',
+      level: 'pass',
+      message: '照片接近正方形，AI 会自动适配',
     };
   }
   return {
@@ -144,67 +145,72 @@ function checkOrientation(w: number, h: number): PrecheckItem {
 }
 
 /**
- * 模糊检测：计算 Laplacian 方差
- * 值越大越清晰，< 50 很模糊，< 100 需要注意
+ * 模糊检测：在缩略图上用水平方向亮度差检测
+ * 用相邻像素亮度差平均值判断清晰度
  */
 function checkBlurry(
   data: Uint8ClampedArray,
   w: number,
   h: number,
 ): PrecheckItem {
-  // 缩到 300px 检测就够了
-  const size = Math.min(300, Math.max(w, h));
-  const scale = size / Math.max(w, h);
+  // 缩略到最长边 200px
+  const MAX = 200;
+  const scale = MAX / Math.max(w, h);
+  if (scale >= 1) {
+    return {
+      id: 'blurry',
+      name: '照片清晰度',
+      level: 'pass',
+      message: '照片尺寸较小，不影响证件照使用',
+    };
+  }
+
   const sw = Math.round(w * scale);
   const sh = Math.round(h * scale);
 
-  // Laplacian 近似：用简单的边缘检测 (3x3 核)
-  let sumEdges = 0;
+  let totalDiff = 0;
   let count = 0;
 
-  for (let y = 1; y < h - 1; y += Math.max(1, Math.round(1 / scale))) {
-    for (let x = 1; x < w - 1; x += Math.max(1, Math.round(1 / scale))) {
-      const idx = (y * w + x) * 4;
-      // 转灰度
-      const gray = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
-      // 简单的拉普拉斯: 4*gray(x,y) - 上下左右
-      const top = 0.299 * data[((y - 1) * w + x) * 4] + 0.587 * data[((y - 1) * w + x) * 4 + 1] + 0.114 * data[((y - 1) * w + x) * 4 + 2];
-      const bottom = 0.299 * data[((y + 1) * w + x) * 4] + 0.587 * data[((y + 1) * w + x) * 4 + 1] + 0.114 * data[((y + 1) * w + x) * 4 + 2];
-      const left = 0.299 * data[(y * w + x - 1) * 4] + 0.587 * data[(y * w + x - 1) * 4 + 1] + 0.114 * data[(y * w + x - 1) * 4 + 2];
-      const right = 0.299 * data[(y * w + x + 1) * 4] + 0.587 * data[(y * w + x + 1) * 4 + 1] + 0.114 * data[(y * w + x + 1) * 4 + 2];
+  for (let y = 0; y < sh; y++) {
+    for (let x = 0; x < sw - 1; x++) {
+      // 映射到原始坐标
+      const ox = Math.round(x / scale);
+      const ox2 = Math.round((x + 1) / scale);
+      const oy = Math.round(y / scale);
 
-      const laplacian = Math.abs(4 * gray - top - bottom - left - right);
-      sumEdges += laplacian;
+      const idx1 = (oy * w + ox) * 4;
+      const idx2 = (oy * w + ox2) * 4;
+
+      const l1 = 0.299 * data[idx1] + 0.587 * data[idx1 + 1] + 0.114 * data[idx1 + 2];
+      const l2 = 0.299 * data[idx2] + 0.587 * data[idx2 + 1] + 0.114 * data[idx2 + 2];
+
+      totalDiff += Math.abs(l1 - l2);
       count++;
     }
   }
 
-  const avg = sumEdges / count;
+  if (count === 0) {
+    return { id: 'blurry', name: '照片清晰度', level: 'pass', message: '照片尺寸正常' };
+  }
 
-  if (avg < 8) {
+  const avgDiff = totalDiff / count;
+
+  // 正常清晰照片 avgDiff 一般在 5-30 之间
+  if (avgDiff < 2.5) {
     return {
-      id: 'blurry',
-      name: '照片清晰度',
-      level: 'fail',
+      id: 'blurry', name: '照片清晰度', level: 'fail',
       message: '照片模糊不清',
-      suggestion: '请重新拍摄，确保对焦清晰、手不抖',
+      suggestion: '请重新拍摄，确保对焦清晰、光线充足',
     };
   }
-  if (avg < 15) {
+  if (avgDiff < 5) {
     return {
-      id: 'blurry',
-      name: '照片清晰度',
-      level: 'warn',
-      message: '照片不够清晰',
-      suggestion: '建议使用光线充足时拍摄的照片',
+      id: 'blurry', name: '照片清晰度', level: 'warn',
+      message: '照片清晰度偏低',
+      suggestion: '建议使用对焦更清晰的照片',
     };
   }
-  return {
-    id: 'blurry',
-    name: '照片清晰度',
-    level: 'pass',
-    message: '照片清晰',
-  };
+  return { id: 'blurry', name: '照片清晰度', level: 'pass', message: '照片清晰' };
 }
 
 function checkBasicExposure(
