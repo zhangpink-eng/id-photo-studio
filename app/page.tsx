@@ -4,10 +4,11 @@ import { useState, useCallback } from 'react';
 import SceneSelector from '@/components/scene-selector';
 import UploadZone from '@/components/upload-zone';
 import PhotoEditor from '@/components/photo-editor';
+import PrecheckOverlay from '@/components/precheck-overlay';
 import HistoryPanel from '@/components/history-panel';
 import type { SceneConfig } from '@/lib/scenes';
 
-type FlowStep = 'upload' | 'scene' | 'edit';
+type FlowStep = 'upload' | 'scene' | 'precheck' | 'edit';
 
 export default function Home() {
   const [step, setStep] = useState<FlowStep>('upload');
@@ -27,18 +28,32 @@ export default function Home() {
     [imageUrl],
   );
 
-  // 选择场景 → 进入编辑
+  // 选择场景 → 进入预检确认
   const handleSceneSelect = useCallback((selected: SceneConfig) => {
     setScene(selected);
+    setStep('precheck');
+  }, []);
+
+  // 预检确认 → 进入编辑（开始自动处理）
+  const handlePrecheckConfirm = useCallback(() => {
     setStep('edit');
   }, []);
 
-  // 编辑页 → 换场景
+  // 预检拒绝 → 回到上传
+  const handlePrecheckReject = useCallback(() => {
+    if (imageUrl) URL.revokeObjectURL(imageUrl);
+    setImage(null);
+    setImageUrl(null);
+    setScene(null);
+    setStep('upload');
+  }, [imageUrl]);
+
+  // 编辑页 → 换场景（保留照片，回到选场景）
   const handleChangeScene = useCallback(() => {
     setStep('scene');
   }, []);
 
-  // 选场景页 → 换照片
+  // 编辑页 / 选场景 → 重头开始
   const handleBackToUpload = useCallback(() => {
     if (imageUrl) URL.revokeObjectURL(imageUrl);
     setImage(null);
@@ -47,14 +62,7 @@ export default function Home() {
     setStep('upload');
   }, [imageUrl]);
 
-  // 编辑页 → 重头开始
-  const handleReset = useCallback(() => {
-    if (imageUrl) URL.revokeObjectURL(imageUrl);
-    setImage(null);
-    setImageUrl(null);
-    setScene(null);
-    setStep('upload');
-  }, [imageUrl]);
+  const handleReset = handleBackToUpload;
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-gray-50 to-white">
@@ -74,9 +82,9 @@ export default function Home() {
             <div className="flex items-center gap-2 shrink-0">
               {/* 流程步进指示器 */}
               <div className="hidden sm:flex items-center gap-1.5 text-xs text-gray-400 mr-3">
-                <StepDot active={step === 'upload'} done={step !== 'upload'} label="上传" />
+                <StepDot active={step === 'upload'} done={step !== 'upload' && step !== 'scene'} label="上传" />
                 <span className="text-gray-300">▸</span>
-                <StepDot active={step === 'scene'} done={step === 'edit'} label="场景" />
+                <StepDot active={step === 'scene' || step === 'precheck'} done={step === 'edit'} label="场景" />
                 <span className="text-gray-300">▸</span>
                 <StepDot active={step === 'edit'} done={false} label="编辑" />
               </div>
@@ -140,7 +148,7 @@ export default function Home() {
                     />
                   </div>
                   <p className="text-xs text-gray-400 mt-2 text-center">
-                    选择用途后进入编辑
+                    选择用途后进入确认
                   </p>
                 </div>
               </div>
@@ -148,7 +156,17 @@ export default function Home() {
           </div>
         )}
 
-        {/* 第三步：编辑 */}
+        {/* 第三步：预检确认（全屏覆盖） */}
+        {step === 'precheck' && imageUrl && (
+          <PrecheckOverlay
+            imageUrl={imageUrl}
+            scene={scene}
+            onConfirm={handlePrecheckConfirm}
+            onReject={handlePrecheckReject}
+          />
+        )}
+
+        {/* 第四步：编辑 */}
         {step === 'edit' && image && imageUrl && (
           <PhotoEditor
             key={image.name}
