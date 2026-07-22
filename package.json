@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "npm run patch --quiet && next dev",
     "build": "npm run patch && next build",
     "start": "next start",
     "patch": "bash patch-webgpu.sh",
