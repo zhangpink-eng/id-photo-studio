@@ -892,9 +892,9 @@ export default function PhotoEditor({ image, imageUrl, scene, onReset }: PhotoEd
         {hasPreview && (
           <div className="pt-2">
             <CompliancePanel
-              previewUrl={previewUrl}
               sceneName={scene?.name}
-              minSize={{ width: effectiveWidthPx, height: effectiveHeightPx }}
+              sizeName={isCustom ? `自定义 ${effectiveWidthPx}×${effectiveHeightPx}` : selectedSize.name}
+              bgLabel={bgColor === '#FFFFFF' ? '白色' : bgColor === '#4476C7' ? '蓝色' : bgColor === '#E53935' ? '红色' : bgColor === 'gradient' ? '渐变' : '自定义'}
             />
           </div>
         )}
