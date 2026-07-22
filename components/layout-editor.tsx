@@ -18,8 +18,6 @@ interface LayoutEditorProps {
   onDownload: (blob: Blob, label: string) => void;
 }
 
-type LayoutStep = 'config' | 'preview';
-
 export default function LayoutEditor({
   personBlob,
   cellSizePx,
@@ -27,7 +25,6 @@ export default function LayoutEditor({
   fillStyle,
   onDownload,
 }: LayoutEditorProps) {
-  const [step, setStep] = useState<LayoutStep>('config');
   const [selectedPaper, setSelectedPaper] = useState(PAPER_SIZES[0].id); // 6寸
   const [margin, setMargin] = useState(5);
   const [spacing, setSpacing] = useState(3);
@@ -80,14 +77,7 @@ export default function LayoutEditor({
     }
   }, [personBlob, fillStyle, layoutConfig, cellSizePx, onDownload, summaryText]);
 
-  // 预览缩略比例
-  const previewScale = useMemo(() => {
-    if (!paperInfo || !layoutResult) return 1;
-    // 缩放到预览框宽度 320px
-    const maxW = 320;
-    const paperPx = paperInfo.widthMm / 25.4 * 300;
-    return maxW / paperPx;
-  }, [paperInfo, layoutResult]);
+  const paperAspect = paperInfo ? paperInfo.widthMm / paperInfo.heightMm : 1;
 
   return (
     <div className="space-y-6">
@@ -165,10 +155,10 @@ export default function LayoutEditor({
         <span className="text-sm text-gray-600">显示裁切线</span>
       </label>
 
-      {/* 排版信息 */}
-      {layoutResult && (
+      {/* 大排版预览 */}
+      {layoutResult && paperInfo && (
         <div className="bg-gray-50 rounded-xl p-4">
-          <div className="flex items-center justify-between text-sm">
+          <div className="flex items-center justify-between text-sm mb-3">
             <span className="text-gray-600">
               <span className="font-medium text-gray-800">{layoutResult.cols}列×{layoutResult.rows}行</span>
               {' = '}
@@ -176,35 +166,47 @@ export default function LayoutEditor({
               {' / 页'}
             </span>
             <span className="text-gray-400 text-xs">
-              占用 {layoutResult.actualWidthMm.toFixed(0)}×{layoutResult.actualHeightMm.toFixed(0)}mm
+              {paperInfo.name} · {layoutResult.actualWidthMm.toFixed(0)}×{layoutResult.actualHeightMm.toFixed(0)}mm
             </span>
           </div>
 
-          {/* 迷你预览图 */}
-          <div className="mt-3 bg-white rounded-lg p-2 border border-gray-100">
-            <div
-              className="relative mx-auto"
-              style={{
-                width: Math.round(paperInfo!.widthMm * previewScale * 2),
-                height: Math.round(paperInfo!.heightMm * previewScale * 2),
-                backgroundColor: '#f0f0f0',
-              }}
-            >
-              {layoutResult.cells.map((cell, i) => (
-                <div
-                  key={i}
-                  className="absolute bg-white border border-gray-300 flex items-center justify-center text-[7px] text-gray-400"
-                  style={{
-                    left: `${(cell.x / paperInfo!.widthMm) * 100}%`,
-                    top: `${(cell.y / paperInfo!.heightMm) * 100}%`,
-                    width: `${(cell.w / paperInfo!.widthMm) * 100}%`,
-                    height: `${(cell.h / paperInfo!.heightMm) * 100}%`,
-                  }}
-                >
-                  📷
-                </div>
-              ))}
-            </div>
+          {/* 预览图 — 宽度 100%，按纸比例定高 */}
+          <div
+            className="relative w-full bg-white rounded-lg border border-gray-200 overflow-hidden"
+            style={{ aspectRatio: `${paperInfo.widthMm} / ${paperInfo.heightMm}` }}
+          >
+            {/* 纸张底色 */}
+            <div className="absolute inset-0 bg-gray-50" />
+
+            {/* 排版单元格 */}
+            {layoutResult.cells.map((cell, i) => (
+              <div
+                key={i}
+                className="absolute flex items-center justify-center bg-white border border-gray-300 text-gray-400"
+                style={{
+                  left: `${(cell.x / paperInfo.widthMm) * 100}%`,
+                  top: `${(cell.y / paperInfo.heightMm) * 100}%`,
+                  width: `${(cell.w / paperInfo.widthMm) * 100}%`,
+                  height: `${(cell.h / paperInfo.heightMm) * 100}%`,
+                }}
+              >
+                <span className="text-[clamp(6px,1.5vw,14px)]">📷</span>
+              </div>
+            ))}
+
+            {/* 裁切线 */}
+            {showCropMarks && layoutResult.cells.map((cell, i) => (
+              <div
+                key={`crop-${i}`}
+                className="absolute border border-dashed border-gray-300/40 pointer-events-none"
+                style={{
+                  left: `${(cell.x / paperInfo.widthMm) * 100}%`,
+                  top: `${(cell.y / paperInfo.heightMm) * 100}%`,
+                  width: `${(cell.w / paperInfo.widthMm) * 100}%`,
+                  height: `${(cell.h / paperInfo.heightMm) * 100}%`,
+                }}
+              />
+            ))}
           </div>
         </div>
       )}
