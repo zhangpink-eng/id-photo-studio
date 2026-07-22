@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useEffect, useState } from 'react';
+import { useRef, useEffect } from 'react';
 import type { SceneConfig } from '@/lib/scenes';
 
 interface PreviewTemplatesProps {
@@ -9,116 +9,85 @@ interface PreviewTemplatesProps {
 }
 
 /**
- * 场景尺寸预览 — 把照片放在实际证件尺寸的框里，
- * 加上头部占比参考线，让用户直观判断是否合适。
- * 不画假证件，只展示真实可验证的尺寸信息。
+ * 头部占比参考 — 在成品照片上叠加头部占比参考线
  */
 export default function PreviewTemplates({ previewUrl, scene = null }: PreviewTemplatesProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (!previewUrl || !canvasRef.current || !scene || !containerRef.current) return;
+    if (!previewUrl || !canvasRef.current || !containerRef.current || !scene) return;
 
     const canvas = canvasRef.current;
     const container = containerRef.current;
 
     const img = new Image();
     img.onload = () => {
-      const containerW = container.clientWidth;
-      if (containerW === 0) return;
+      const cw = container.clientWidth;
+      if (cw === 0) return;
 
-      // 用 300DPI 还原真实尺寸比例
-      // 证件的真实显示比例 = widthMm : heightMm
-      // 我们找一个基准：在 400px 宽度下按比例缩放
-      const baseW = 400;
-      const baseH = baseW * (scene.headRatio.max || 0.7) * 1.4; // 留出上下空间
+      // 保持照片比例，宽度撑满
+      const aspect = img.naturalHeight / img.naturalWidth;
+      const ch = Math.round(cw * aspect);
 
-      canvas.width = containerW;
-      canvas.height = Math.round(containerW * (baseH / baseW));
+      canvas.width = cw;
+      canvas.height = ch;
+      canvas.style.width = `${cw}px`;
+      canvas.style.height = `${ch}px`;
+
       const ctx = canvas.getContext('2d')!;
 
-      const cw = canvas.width;
-      const ch = canvas.height;
+      // 绘制照片（填满画布，保持比例）
+      ctx.drawImage(img, 0, 0, cw, ch);
 
-      // 底色
-      ctx.fillStyle = '#f5f5f5';
-      ctx.fillRect(0, 0, cw, ch);
+      const w = cw;
+      const h = ch;
 
-      // === 证件照尺寸框 ===
-      // 用场景尺寸按 300DPI 转像素
-      const mmToPx = (mm: number) => Math.round(mm / 25.4 * 300 * (cw / 600));
-      const frameW = mmToPx(scene.headRatio.max * 80); // 视觉宽度
-      const frameH = mmToPx(scene.headRatio.max * 100); // 视觉高度
-      const frameX = (cw - frameW) / 2;
-      const frameY = (ch - frameH) / 2;
+      // 头部占比参考线
+      const minY = h * (1 - scene.headRatio.max);
+      const maxY = h * (1 - scene.headRatio.min);
 
-      // 阴影
-      ctx.shadowColor = 'rgba(0,0,0,0.08)';
-      ctx.shadowBlur = 12;
-      ctx.fillStyle = '#ffffff';
+      // 头部区间半透明底色
+      ctx.fillStyle = 'rgba(59,130,246,0.06)';
+      ctx.fillRect(0, minY, w, maxY - minY);
+
+      // 上限线
+      ctx.strokeStyle = '#3b82f6';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([6, 4]);
       ctx.beginPath();
-      ctx.roundRect(frameX, frameY, frameW, frameH, 4);
-      ctx.fill();
-      ctx.shadowBlur = 0;
-
-      // 照片区域（占满证件框）
-      const innerPad = 2;
-      const photoX = frameX + innerPad;
-      const photoY = frameY + innerPad;
-      const photoW = frameW - innerPad * 2;
-      const photoH = frameH - innerPad * 2;
-
-      ctx.save();
-      ctx.beginPath();
-      ctx.roundRect(photoX, photoY, photoW, photoH, 2);
-      ctx.clip();
-
-      // 绘制照片（cover 模式铺满）
-      const scale = Math.max(photoW / img.naturalWidth, photoH / img.naturalHeight);
-      const dx = photoX + (photoW - img.naturalWidth * scale) / 2;
-      const dy = photoY + (photoH - img.naturalHeight * scale) / 2;
-      ctx.drawImage(img, dx, dy, img.naturalWidth * scale, img.naturalHeight * scale);
-      ctx.restore();
-
-      // === 头部占比参考线 ===
-      // 从底部往上画一根横线，表示头部在框内占的比例
-      const headLineY = photoY + photoH * (1 - scene.headRatio.max);
-      ctx.strokeStyle = 'rgba(59,130,246,0.5)';
-      ctx.lineWidth = 1.5;
-      ctx.setLineDash([5, 3]);
-      ctx.beginPath();
-      ctx.moveTo(photoX + 4, headLineY);
-      ctx.lineTo(photoX + photoW - 4, headLineY);
+      ctx.moveTo(0, minY);
+      ctx.lineTo(w, minY);
       ctx.stroke();
       ctx.setLineDash([]);
 
-      // 头部占比文字
-      ctx.fillStyle = 'rgba(59,130,246,0.7)';
-      ctx.font = `11px sans-serif`;
-      ctx.textAlign = 'left';
-      ctx.fillText(
-        `头部占比 ≤ ${Math.round(scene.headRatio.max * 100)}%`,
-        photoX + 6,
-        headLineY - 4,
-      );
+      // 上限标签
+      ctx.fillStyle = '#3b82f6';
+      ctx.font = `bold ${Math.max(12, Math.round(w * 0.025))}px sans-serif`;
+      ctx.textAlign = 'right';
+      ctx.fillText(`头部 ≤ ${Math.round(scene.headRatio.max * 100)}%`, w - 8, minY - 6);
 
-      // 底部黑色虚线框 — 表示头部最小占比
-      const headMinY = photoY + photoH * (1 - scene.headRatio.min);
-      ctx.strokeStyle = 'rgba(59,130,246,0.25)';
-      ctx.lineWidth = 1;
+      // 下限线
+      ctx.strokeStyle = 'rgba(59,130,246,0.35)';
+      ctx.lineWidth = 1.5;
       ctx.setLineDash([3, 3]);
       ctx.beginPath();
-      ctx.moveTo(photoX + 4, headMinY);
-      ctx.lineTo(photoX + photoW - 4, headMinY);
+      ctx.moveTo(0, maxY);
+      ctx.lineTo(w, maxY);
       ctx.stroke();
       ctx.setLineDash([]);
 
-      // === 场景信息角标 ===
-      ctx.fillStyle = 'rgba(0,0,0,0.4)';
-      ctx.font = `10px sans-serif`;
+      // 下限标签
+      ctx.fillStyle = 'rgba(59,130,246,0.55)';
+      ctx.font = `${Math.max(11, Math.round(w * 0.022))}px sans-serif`;
+      ctx.textAlign = 'right';
+      ctx.fillText(`头部 ≥ ${Math.round(scene.headRatio.min * 100)}%`, w - 8, maxY - 5);
+
+      // 场景名
+      ctx.fillStyle = 'rgba(0,0,0,0.25)';
+      ctx.font = `11px sans-serif`;
       ctx.textAlign = 'left';
-      ctx.fillText(`${scene.name} · 头部 ${Math.round(scene.headRatio.min * 100)}%-${Math.round(scene.headRatio.max * 100)}%`, 8, ch - 6);
+      ctx.fillText(scene.name, 8, 16);
     };
     img.src = previewUrl;
   }, [previewUrl, scene]);
@@ -129,15 +98,15 @@ export default function PreviewTemplates({ previewUrl, scene = null }: PreviewTe
     <div className="space-y-2">
       <h3 className="text-sm font-medium text-gray-700 flex items-center gap-1.5">
         <span>📐</span>
-        尺寸比例参考
+        头部占比参考线
       </h3>
 
-      <div ref={containerRef} className="relative bg-gray-100 rounded-xl overflow-hidden border border-gray-200">
+      <div ref={containerRef} className="bg-gray-100 rounded-xl overflow-hidden border border-gray-200">
         <canvas ref={canvasRef} className="w-full" />
       </div>
 
       <p className="text-xs text-gray-400">
-        白色区域为证件照边界，蓝线为头部占比上限参考
+        {scene.name}要求头部占比 {Math.round(scene.headRatio.min * 100)}%-{Math.round(scene.headRatio.max * 100)}%
       </p>
     </div>
   );
