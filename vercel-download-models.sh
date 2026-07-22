@@ -1,7 +1,7 @@
 #!/bin/bash
 # vercel-download-models.sh
 #
-# Vercel 构建专用：将 isnet_quint8 模型（42MB）直接下载到 public/models/
+# Vercel 构建专用：将 isnet 模型（168MB）直接下载到 public/models/
 #
 # 用法：在 vercel-build 脚本中调用
 #   bash vercel-download-models.sh
@@ -21,21 +21,21 @@ RESOURCE_JSON="${OUTPUT_DIR}/resources.json"
 curl -sfL "${CDN_BASE}/resources.json" -o "$RESOURCE_JSON"
 echo "    ✅ 完成 ($(wc -c < "$RESOURCE_JSON") bytes)"
 
-# 2. 过滤出 isnet_quint8 的 chunks
+# 2. 过滤出 isnet 的 chunks
 echo "  2/3 解析模型文件清单..."
 node -e "
 const fs = require('fs');
 const data = JSON.parse(fs.readFileSync('$RESOURCE_JSON', 'utf-8'));
-// 只保留 isnet_quint8
-const model = data['/models/isnet_quint8'];
-if (!model) { console.error('❌ 未找到 isnet_quint8 模型'); process.exit(1); }
-fs.writeFileSync('$RESOURCE_JSON', JSON.stringify({'/models/isnet_quint8': model}, null, 2));
+// 只保留 isnet
+const model = data['/models/isnet'];
+if (!model) { console.error('❌ 未找到 isnet 模型'); process.exit(1); }
+fs.writeFileSync('$RESOURCE_JSON', JSON.stringify({'/models/isnet': model}, null, 2));
 const seen = new Set();
 model.chunks.forEach(c => { if (!seen.has(c.name)) { seen.add(c.name); console.log(c.name); } });
 " > /tmp/model_chunks.txt
 
 CHUNK_COUNT=$(wc -l < /tmp/model_chunks.txt)
-echo "    ✅ 需要下载 ${CHUNK_COUNT} 个 chunk 文件 (42MB)"
+echo "    ✅ 需要下载 ${CHUNK_COUNT} 个 chunk 文件 (168MB)"
 
 # 3. 下载 chunck 文件
 echo "  3/3 下载 chunk 文件..."

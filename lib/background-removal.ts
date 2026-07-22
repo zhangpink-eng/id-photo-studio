@@ -13,8 +13,8 @@ import { removeBackground } from '@imgly/background-removal';
 
 export type RemoveBgCallback = (progress: number, status: string) => void;
 
-/** 使用量化 ISNet 模型（42MB，精度与全精度几乎无异，速度快 3-5 倍） */
-const DEFAULT_MODEL = 'isnet_quint8';
+/** 使用全精度 ISNet 模型（168MB，精度最高） */
+const DEFAULT_MODEL = 'isnet';
 
 /**
  * 获取 NEXT_PUBLIC_* 环境变量（安全兼容浏览器端）
