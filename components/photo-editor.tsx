@@ -162,6 +162,12 @@ export default function PhotoEditor({ image, imageUrl, scene, onReset }: PhotoEd
     };
   }, []);
 
+  /** ref 方式存 showBeauty/beauty，解决闭包旧值问题 */
+  const showBeautyRef = useRef(showBeauty);
+  showBeautyRef.current = showBeauty;
+  const beautyRef = useRef(beauty);
+  beautyRef.current = beauty;
+
   // ---- AI 抠图 ----
   const handleRemoveBackground = useCallback(async () => {
     setStep('uploading');
@@ -173,7 +179,7 @@ export default function PhotoEditor({ image, imageUrl, scene, onReset }: PhotoEd
     try {
       // Stage 0: 准备照片
       let sourceBlob;
-      if (showBeauty) {
+      if (showBeautyRef.current) {
         const img = await loadImage(imageUrl);
         const canvas = document.createElement('canvas');
         canvas.width = img.naturalWidth;
@@ -181,7 +187,7 @@ export default function PhotoEditor({ image, imageUrl, scene, onReset }: PhotoEd
         const ctx = canvas.getContext('2d')!;
         ctx.drawImage(img, 0, 0);
         const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        const processed = applyBeauty(imageData, beauty);
+        const processed = applyBeauty(imageData, beautyRef.current);
         ctx.putImageData(processed, 0, 0);
         sourceBlob = await new Promise<Blob>((resolve) =>
           canvas.toBlob((b) => resolve(b!), 'image/jpeg', 0.95)
@@ -241,10 +247,13 @@ export default function PhotoEditor({ image, imageUrl, scene, onReset }: PhotoEd
     if (!sceneRef.current) return;
 
     autoStartedRef.current = true;
-    // 先设置美颜状态，让 React 刷新后再启动抠图（确保 showBeauty=true 生效）
-    setBeauty({ smoothing: 50, spotHeal: 40, brightness: 25, sharpness: 30 });
+    // 同时更新 state 和 ref（抠图回调用 ref，不依赖 state 刷新）
+    const freshPreset = { smoothing: 50, spotHeal: 40, brightness: 25, sharpness: 30 };
+    setBeauty(freshPreset);
+    beautyRef.current = freshPreset;
     setShowBeauty(true);
-    setTimeout(() => removeBgRef.current(), 50);
+    showBeautyRef.current = true;
+    removeBgRef.current();
   }, []);
 
   // ---- 合成预览（依赖变化时自动重算） ----
