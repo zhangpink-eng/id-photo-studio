@@ -5,112 +5,120 @@ import type { SceneConfig } from '@/lib/scenes';
 import { PHOTO_SIZES } from '@/lib/constants';
 
 interface PreviewTemplatesProps {
-  previewUrl: string | null;
+  /** 抠图后的人像 Blob（透明 PNG，用于检测人像边界） */
+  personBlob: Blob | null;
   scene?: SceneConfig | null;
 }
 
 /**
- * 在成品照片上叠加证件照标准尺寸框 + 头部占比数据
+ * 在原始照片上叠加证件照标准尺寸框 + 头部占比检测
+ * 让用户看到：我拍的照片，头部在框里占百分之多少
  */
-export default function PreviewTemplates({ previewUrl, scene = null }: PreviewTemplatesProps) {
+export default function PreviewTemplates({ personBlob, scene = null }: PreviewTemplatesProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (!previewUrl || !canvasRef.current || !containerRef.current || !scene) return;
+    if (!personBlob || !canvasRef.current || !containerRef.current || !scene) return;
 
     const canvas = canvasRef.current;
     const container = containerRef.current;
-
     const img = new Image();
+
     img.onload = () => {
-      const iw = img.naturalWidth;
-      const ih = img.naturalHeight;
       const cw = container.clientWidth;
       if (cw === 0) return;
 
-      // 保持照片比例
-      const aspect = ih / iw;
+      const ch = Math.round(cw * (img.naturalHeight / img.naturalWidth));
       canvas.width = cw;
-      canvas.height = Math.round(cw * aspect);
-      const h = canvas.height;
-
+      canvas.height = ch;
       const ctx = canvas.getContext('2d')!;
 
-      // 1. 绘制完整照片
-      ctx.drawImage(img, 0, 0, cw, h);
+      // 1. 绘制原始照片
+      ctx.drawImage(img, 0, 0, cw, ch);
 
-      // 2. 检测人像边界（用第一版的方法：找 alpha 通道）
-      const imageData = ctx.getImageData(0, 0, cw, h);
+      // 2. 检测人像边界
+      const imageData = ctx.getImageData(0, 0, cw, ch);
       const data = imageData.data;
       let top = -1, bottom = -1;
-      for (let y = 0; y < h && top === -1; y++)
+      for (let y = 0; y < ch && top === -1; y++)
         for (let x = 0; x < cw; x++)
           if (data[(y * cw + x) * 4 + 3] > 128) { top = y; break; }
-      for (let y = h - 1; y >= 0 && bottom === -1; y--)
+      for (let y = ch - 1; y >= 0 && bottom === -1; y--)
         for (let x = 0; x < cw; x++)
           if (data[(y * cw + x) * 4 + 3] > 128) { bottom = y; break; }
 
-      // 3. 画证件照尺寸框（居中，维持目标宽高比）
-      // 从场景匹配真实照片尺寸比例
+      // 3. 画目标证件照尺寸框
       const sceneSize = PHOTO_SIZES.find((s) => s.id === scene.sizeId);
-      const sizeRatio = sceneSize ? sceneSize.widthMm / sceneSize.heightMm : 0.7;
+      const ratio = sceneSize ? sceneSize.widthMm / sceneSize.heightMm : 0.7;
       const boxW = Math.round(cw * 0.75);
-      const boxH = Math.round(boxW / sizeRatio);
+      const boxH = Math.round(boxW / ratio);
       const boxX = (cw - boxW) / 2;
-      const boxY = (h - boxH) / 2;
+      const boxY = (ch - boxH) / 2;
 
+      // 框外半透明遮罩（让框更突出）
+      ctx.fillStyle = 'rgba(0,0,0,0.12)';
+      ctx.fillRect(0, 0, cw, boxY);
+      ctx.fillRect(0, boxY + boxH, cw, ch - boxY - boxH);
+      ctx.fillRect(0, boxY, boxX, boxH);
+      ctx.fillRect(boxX + boxW, boxY, cw - boxX - boxW, boxH);
+
+      // 蓝色虚线框
       ctx.strokeStyle = '#3b82f6';
-      ctx.lineWidth = 2;
-      ctx.setLineDash([5, 3]);
+      ctx.lineWidth = 2.5;
+      ctx.setLineDash([6, 4]);
       ctx.strokeRect(boxX, boxY, boxW, boxH);
       ctx.setLineDash([]);
 
-      // 4. 计算头部占比
+      // 框上方：目标尺寸标注
+      const fs = Math.max(11, Math.round(cw * 0.025));
+      ctx.fillStyle = '#3b82f6';
+      ctx.font = `bold ${fs}px sans-serif`;
+      ctx.textAlign = 'left';
+      const targetLabel = sceneSize
+        ? `${scene.name} · ${sceneSize.widthMm}×${sceneSize.heightMm}mm`
+        : scene.name;
+      ctx.fillText(targetLabel, boxX, boxY - 8);
+
+      // 4. 头部占比
       if (top !== -1 && bottom !== -1) {
-        const headPx = bottom - top;
-        const frameHeightPx = boxH;
-        const headRatio = headPx / frameHeightPx;
-
-        // 框左上角显示头部占比数据
-        ctx.fillStyle = 'rgba(59,130,246,0.9)';
-        const fontSize = Math.max(13, Math.round(cw * 0.03));
-        ctx.font = `bold ${fontSize}px sans-serif`;
-        ctx.textAlign = 'left';
-
-        // 背景标签
-        const label = `头部占比 ${Math.round(headRatio * 100)}%`;
-        const metrics = ctx.measureText(label);
-        const labelPad = 6;
-        ctx.fillStyle = 'rgba(255,255,255,0.85)';
-        ctx.fillRect(boxX + 4, boxY + 4, metrics.width + labelPad * 2, fontSize + labelPad * 2);
-
-        ctx.fillStyle = '#3b82f6';
-        ctx.fillText(label, boxX + 4 + labelPad, boxY + 4 + fontSize + labelPad);
-
-        // 头部占比是否符合
+        const headRatio = (bottom - top) / boxH;
         const isOk = headRatio >= scene.headRatio.min && headRatio <= scene.headRatio.max;
-        ctx.fillStyle = isOk ? 'rgba(34,197,94,0.9)' : 'rgba(239,68,68,0.9)';
-        ctx.font = `bold ${Math.max(12, Math.round(cw * 0.028))}px sans-serif`;
-        const status = isOk ? '✅ 符合要求' : '⚠️ 超出范围';
-        ctx.textAlign = 'right';
-        ctx.fillText(status, boxX + boxW - 8, boxY + fontSize + labelPad + 4);
 
-        // 场景要求值
+        // 百分比标签
+        const label = `头部占比 ${Math.round(headRatio * 100)}%`;
+        const fs2 = Math.max(14, Math.round(cw * 0.032));
+        ctx.font = `bold ${fs2}px sans-serif`;
+        const m = ctx.measureText(label);
+        const pad = 8;
+        const lx = boxX + 6;
+        const ly = boxY + 6;
+
+        ctx.fillStyle = 'rgba(0,0,0,0.55)';
+        ctx.fillRect(lx, ly, m.width + pad * 2, fs2 + pad * 2);
+        ctx.fillStyle = '#fff';
+        ctx.fillText(label, lx + pad, ly + fs2 + pad - 1);
+
+        // 状态
+        const status = isOk ? '✅ 符合要求' : `⚠️ 需要调整 (${Math.round(scene.headRatio.min * 100)}%-${Math.round(scene.headRatio.max * 100)}%)`;
+        ctx.font = `bold ${Math.max(12, Math.round(cw * 0.028))}px sans-serif`;
+        ctx.textAlign = 'right';
+        ctx.fillStyle = isOk ? '#16a34a' : '#dc2626';
+        ctx.fillText(status, boxX + boxW - 6, ly + fs2 + pad - 1);
+
+        // 标准范围
         ctx.fillStyle = 'rgba(0,0,0,0.35)';
-        ctx.font = `${Math.max(10, Math.round(cw * 0.022))}px sans-serif`;
+        ctx.font = `${Math.max(10, Math.round(cw * 0.02))}px sans-serif`;
         ctx.textAlign = 'left';
-        ctx.fillText(
-          `${scene.name} 标准: ${Math.round(scene.headRatio.min * 100)}%-${Math.round(scene.headRatio.max * 100)}%`,
-          boxX + 4,
-          boxY - 6,
-        );
+        ctx.fillText(`标准 ${Math.round(scene.headRatio.min * 100)}%-${Math.round(scene.headRatio.max * 100)}%`, boxX + 6, boxY + boxH - 5);
       }
     };
-    img.src = previewUrl;
-  }, [previewUrl, scene]);
+    const blobUrl = URL.createObjectURL(personBlob);
+    img.src = blobUrl;
+    return () => URL.revokeObjectURL(blobUrl);
+  }, [personBlob, scene]);
 
-  if (!previewUrl || !scene) return null;
+  if (!personBlob || !scene) return null;
 
   return (
     <div className="space-y-2">
@@ -124,7 +132,7 @@ export default function PreviewTemplates({ previewUrl, scene = null }: PreviewTe
       </div>
 
       <p className="text-xs text-gray-400">
-        蓝色虚线框为证件照标准边界，检测头部在框内的占比
+        蓝色虚线框为 {scene.name} 标准尺寸，检测头部在框内的占比
       </p>
     </div>
   );

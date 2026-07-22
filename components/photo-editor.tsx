@@ -971,10 +971,10 @@ export default function PhotoEditor({ image, imageUrl, scene, onReset }: PhotoEd
           </div>
         )}
 
-        {/* ---- 场景预览 ---- */}
-        {hasPreview && (
+        {/* ---- 头部占比检测（仅处理完成后显示）---- */}
+        {step === 'done' && personBlob && (
           <div className="pt-2">
-            <PreviewTemplates previewUrl={previewUrl} scene={scene} />
+            <PreviewTemplates personBlob={personBlob} scene={scene} />
           </div>
         )}
 
