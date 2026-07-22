@@ -16,6 +16,7 @@ import type { SceneConfig } from '@/lib/scenes';
 import LayoutEditor from '@/components/layout-editor';
 import CompliancePanel from '@/components/compliance-panel';
 import BatchGenerator from '@/components/batch-generator';
+import PreviewTemplates from '@/components/preview-templates';
 import { autoFixPipeline } from '@/lib/auto-fix';
 import { addHistoryRecord, generateThumbnail } from '@/lib/history';
 
@@ -967,6 +968,16 @@ export default function PhotoEditor({ image, imageUrl, scene, onReset }: PhotoEd
                 </div>
               </div>
             )}
+          </div>
+        )}
+
+        {/* ---- 场景预览 ---- */}
+        {hasPerson && (
+          <div className="pt-2">
+            <PreviewTemplates
+              personBlob={personBlob}
+              fallbackUrl={previewUrl}
+            />
           </div>
         )}
 
