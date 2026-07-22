@@ -1,18 +1,17 @@
 /**
  * 证件照云端抠图 API 服务
  *
- * 运行在阿里云服务器上，模型 168MB 常驻内存。
- * 浏览器端不需要下载模型，只需上传照片即可。
+ * 直接使用 onnxruntime-node + 本地模型文件，
+ * 不依赖 @imgly/background-removal-node
+ *
+ * 模型 168MB 常驻内存，用户上传照片即可抠图。
  *
  * 启动：
- *   npm start                    # 开发
- *   PORT=3001 node index.mjs     # 自定义端口
- *   pm2 start index.mjs          # 生产（推荐）
+ *   npm start
  *
  * 环境变量：
- *   PORT             端口（默认 3001）
- *   ALLOWED_ORIGIN   允许跨域的前端域名（可选，默认无限制）
- *   MODEL_DIR        模型目录路径（默认 ./models）
+ *   PORT          端口（默认 3001）
+ *   MODEL_DIR     模型目录（默认 ./models）
  */
 
 import express from 'express';
@@ -22,163 +21,218 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import 'dotenv/config';
+import ort from 'onnxruntime-node';
+import sharp from 'sharp';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3001;
 const MODEL_DIR = path.resolve(process.env.MODEL_DIR || path.join(__dirname, 'models'));
 const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || '*';
 
-// ============================================================
-// 初始化
-// ============================================================
-
 const app = express();
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 30 * 1024 * 1024 }, // 30MB
-});
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 30 * 1024 * 1024 } });
 
 app.use(cors({ origin: ALLOWED_ORIGIN }));
 app.use(express.json());
 
 // ============================================================
-// 模型管理
+// 模型加载
 // ============================================================
 
-let removeBackground = null;
+let session = null;
 let modelLoaded = false;
-let modelLoading = false;
+let inputName = null;
+let outputName = null;
 
 /**
- * 加载 @imgly/background-removal 模型
- * 首次调用时加载，之后常驻内存
+ * 从 chunk 文件组装完整 ONNX 模型
  */
-async function loadModel() {
-  if (modelLoaded) return removeBackground;
-  if (modelLoading) {
-    // 如果正在加载，等待完成
-    while (modelLoading) await new Promise(r => setTimeout(r, 100));
-    return removeBackground;
-  }
-
-  modelLoading = true;
-  console.log('\n📦 正在加载 AI 模型...');
-
-  // 检查模型文件是否存在
+function assembleModel() {
   const resourcePath = path.join(MODEL_DIR, 'resources.json');
   if (!fs.existsSync(resourcePath)) {
-    console.warn('  ⚠️  模型文件未找到，请先运行: bash download-models.sh');
-    console.warn(`     期望路径: ${resourcePath}`);
-    modelLoading = false;
-    return null;
+    throw new Error(`resources.json 未找到: ${resourcePath}`);
   }
 
-  try {
-    // 动态导入 ESM 模块
-    const imgly = await import('@imgly/background-removal');
-    removeBackground = imgly.removeBackground;
+  const resJson = JSON.parse(fs.readFileSync(resourcePath, 'utf-8'));
+  const modelKey = Object.keys(resJson)[0];
+  if (!modelKey) throw new Error('resources.json 中无模型定义');
 
+  const modelDef = resJson[modelKey];
+  const sortedChunks = modelDef.chunks.sort((a, b) => a.offsets[0] - b.offsets[0]);
+
+  // 计算总大小
+  const totalSize = sortedChunks[sortedChunks.length - 1].offsets[1];
+  const buffer = Buffer.alloc(totalSize);
+
+  sortedChunks.forEach((chunk) => {
+    const chunkPath = path.join(MODEL_DIR, chunk.name);
+    if (!fs.existsSync(chunkPath)) {
+      throw new Error(`模型 chunk 缺失: ${chunkPath}`);
+    }
+    const data = fs.readFileSync(chunkPath);
+    data.copy(buffer, chunk.offsets[0], 0, data.length);
+  });
+
+  console.log(`  模型: ${modelKey}, ${(totalSize / 1024 / 1024).toFixed(1)} MB, ${sortedChunks.length} chunks`);
+  return buffer;
+}
+
+async function loadModel() {
+  console.log('\n📦 加载 AI 模型...');
+  try {
+    const modelBuffer = assembleModel();
+    session = await ort.InferenceSession.create(modelBuffer);
+    inputName = session.inputNames[0];
+    outputName = session.outputNames[0];
     modelLoaded = true;
-    console.log('  ✅ 模型加载成功！');
-    console.log(`     模型路径: ${MODEL_DIR}`);
-    console.log(`     模型版本: isnet (168MB)`);
-    return removeBackground;
+    console.log(`  ✅ 加载成功 (输入: ${inputName}, 输出: ${outputName})`);
+    console.log('🚀 服务就绪!\n');
   } catch (err) {
-    console.error('  ❌ 模型加载失败:', err.message);
-    modelLoading = false;
-    return null;
+    console.error('  ❌ 加载失败:', err.message);
   }
 }
 
-// 启动时异步加载模型
-loadModel().then(() => {
-  console.log('🚀 服务就绪，等待请求...\n');
-});
+loadModel();
+
+// ============================================================
+// 图像处理工具
+// ============================================================
+
+/**
+ * 加载图片到 Tensor（归一化至 0-1）
+ */
+async function imageToTensor(imgBuffer) {
+
+  // 模型输入尺寸: 1024x1024
+  const INPUT_SIZE = 1024;
+  const { data, info } = await sharp(imgBuffer)
+    .resize(INPUT_SIZE, INPUT_SIZE, { fit: 'fill' })
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+
+  // HWC → CHW + normalize to [0,1]
+  const { width, height, channels } = info;
+  const float32 = new Float32Array(1 * channels * height * width);
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      for (let c = 0; c < channels; c++) {
+        float32[c * height * width + y * width + x] = data[(y * width + x) * channels + c] / 255.0;
+      }
+    }
+  }
+
+  return { tensor: new ort.Tensor('float32', float32, [1, channels, height, width]), width, height, channels };
+}
+
+/**
+ * 运行人像分割
+ */
+async function runSegmentation(imageBuffer) {
+  if (!session) throw new Error('模型未加载');
+
+  const { tensor, width, height } = await imageToTensor(imageBuffer);
+
+  const feeds = { [inputName]: tensor };
+  const results = await session.run(feeds);
+  const output = results[outputName];
+
+  // 输出多为 [1, 1, H, W] 的形状
+  const data = output.data;
+  const outH = output.dims?.[2] || height;
+  const outW = output.dims?.[3] || width;
+
+  return { mask: data, width: outW, height: outH, origW: width, origH: height };
+}
+
+/**
+ * 将分割结果合成透明 PNG
+ */
+async function applyMask(imgBuffer, mask) {
+
+  // 将 mask 数据转为 1 通道图像，缩放到原图尺寸
+  const maskBuffer = Buffer.from(mask.mask);
+  const maskImg = await sharp(maskBuffer, {
+    raw: { width: mask.width, height: mask.height, channels: 1 },
+  })
+    .resize(mask.origW, mask.origH, { fit: 'fill' })
+    .raw()
+    .toBuffer();
+
+  // 获取原图 RGBA
+  const { data, info } = await sharp(imgBuffer)
+    .resize(mask.origW, mask.origH, { fit: 'fill' })
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+
+  // 合成：将 mask 作为 alpha 通道（mask 值 0-1 转为 0-255）
+  const rgba = Buffer.alloc(info.width * info.height * 4);
+  for (let i = 0; i < info.width * info.height; i++) {
+    rgba[i * 4] = data[i * 4];       // R
+    rgba[i * 4 + 1] = data[i * 4 + 1]; // G
+    rgba[i * 4 + 2] = data[i * 4 + 2]; // B
+    // Alpha = mask 值 * 255（>=0.5 为前景，<0.5 透明）
+    const alpha = Math.round(maskImg[i] * 255);
+    rgba[i * 4 + 3] = alpha > 128 ? 255 : 0;
+  }
+
+  return await sharp(rgba, {
+    raw: { width: info.width, height: info.height, channels: 4 },
+  })
+    .png()
+    .toBuffer();
+}
 
 // ============================================================
 // API 路由
 // ============================================================
 
-/** 健康检查 */
 app.get('/api/health', (req, res) => {
-  res.json({
-    status: 'ok',
-    modelLoaded,
-    model: 'isnet',
-    modelDir: MODEL_DIR,
-  });
+  res.json({ status: 'ok', modelLoaded, model: 'isnet(168MB)', modelDir: MODEL_DIR });
 });
 
-/** 移除图片背景 */
 app.post('/api/remove-bg', upload.single('image'), async (req, res) => {
-  const startTime = Date.now();
+  const start = Date.now();
 
   try {
-    // 1. 检查模型
-    if (!removeBackground) {
-      const loaded = await loadModel();
-      if (!loaded) {
-        return res.status(503).json({
-          error: '模型未就绪',
-          message: '请先运行 bash download-models.sh 下载模型',
-        });
-      }
+    if (!modelLoaded || !session) {
+      return res.status(503).json({ error: '模型加载中，请稍后再试' });
     }
-
-    // 2. 检查上传
     if (!req.file) {
       return res.status(400).json({ error: '请上传图片' });
     }
 
-    console.log(`  📸 收到图片: ${(req.file.size / 1024 / 1024).toFixed(2)} MB, ${req.file.mimetype}`);
+    console.log(`  📸 收到: ${(req.file.size / 1024 / 1024).toFixed(2)} MB`);
 
-    // 3. 执行抠图
-    const result = await removeBackground(req.file.buffer, {
-      model: 'isnet',
-      publicPath: MODEL_DIR + '/',
-      progress: (key, current, total) => {
-        if (key === 'inference' && total > 0) {
-          const pct = Math.round((current / total) * 100);
-          if (pct % 25 === 0) console.log(`     推理进度: ${pct}%`);
-        }
-      },
-    });
+    const segResult = await runSegmentation(req.file.buffer);
+    const resultPng = await applyMask(req.file.buffer, segResult);
 
-    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-
-    // 4. 返回 PNG
+    const elapsed = ((Date.now() - start) / 1000).toFixed(1);
     res.set({
       'Content-Type': 'image/png',
       'X-Processing-Time': `${elapsed}s`,
     });
-    res.send(result);
+    res.send(resultPng);
+    console.log(`  ✅ 完成 (${elapsed}s)`);
 
-    console.log(`  ✅ 抠图完成 (${elapsed}s)`);
   } catch (err) {
-    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-    console.error(`  ❌ 处理失败 (${elapsed}s):`, err.message);
-    res.status(500).json({
-      error: '背景移除失败',
-      detail: err.message,
-    });
+    console.error(`  ❌ 失败:`, err);
+    res.status(500).json({ error: '背景移除失败', detail: err.message });
   }
 });
 
 // ============================================================
-// 静态文件服务（可选：托管前端或模型文件）
+// 启动
 // ============================================================
 
 app.use('/models', express.static(MODEL_DIR));
-
-// ============================================================
-// 启动
-// ============================================================
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log('\n========================================');
   console.log('  一拍即合 · 云端抠图 API');
   console.log(`  端口: ${PORT}`);
   console.log(`  模型: ${MODEL_DIR}`);
-  console.log(`  状态: ${modelLoaded ? '✅ 已加载' : '⏳ 启动中...'}`);
+  console.log(`  状态: ${modelLoaded ? '✅ 已加载' : '⏳ 加载中...'}`);
   console.log('========================================\n');
 });

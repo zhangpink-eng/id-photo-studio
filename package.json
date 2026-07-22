@@ -8,7 +8,7 @@
     "start": "next start",
     "patch": "bash patch-webgpu.sh",
     "download-models": "bash download-models.sh",
-    "vercel-build": "bash patch-webgpu.sh && next build",
+    "vercel-build": "if [ -z \"$NEXT_PUBLIC_REMOVE_BG_API\" ]; then bash vercel-download-models.sh; fi && bash patch-webgpu.sh && next build",
     "postinstall": "bash patch-webgpu.sh",
     "pretest": "bash patch-webgpu.sh"
   },

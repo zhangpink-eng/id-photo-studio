@@ -196,33 +196,32 @@ export default function PhotoEditor({ image, imageUrl, scene, onReset }: PhotoEd
   const autoStartedRef = useRef(false);
   const sceneRef = useRef(scene);
   sceneRef.current = scene;
+  const removeBgRef = useRef(handleRemoveBackground);
+  removeBgRef.current = handleRemoveBackground;
 
-  // 自动处理：进入编辑时如果选了场景，自动开始抠图+换底+美颜
+  // 自动处理：进入编辑时如果选了场景，自动开始抠图+换底（不自动美颜）
   useEffect(() => {
     if (autoStartedRef.current) return;
     if (!sceneRef.current) return;
 
     autoStartedRef.current = true;
-    setStatusText('准备上传照片...');
+    setStatusText('正在处理中...');
     setStep('downloading');
-    setProgress(1);
+    setProgress(2);
 
-    // 模拟进度：在 AI 模型加载期间保证进度条不卡死
-    let fakeProgress = 1;
+    // 模拟进度防卡死
+    let fakeProgress = 2;
     const fakeTimer = setInterval(() => {
-      fakeProgress += 1 + Math.random() * 2;
-      if (fakeProgress < 90) {
+      fakeProgress += 1.5 + Math.random() * 2;
+      if (fakeProgress < 85) {
         setProgress((prev) => Math.max(prev, Math.round(fakeProgress)));
       }
-    }, 800);
+    }, 600);
 
     const timer = setTimeout(async () => {
-      setBeauty({ smoothing: 50, spotHeal: 40, brightness: 25, sharpness: 30 });
-      setShowBeauty(true);
-      // 当真实进度超过模拟值时，模拟自动停止
       clearInterval(fakeTimer);
-      handleRemoveBackground();
-    }, 300);
+      removeBgRef.current();
+    }, 400);
 
     return () => {
       clearTimeout(timer);
