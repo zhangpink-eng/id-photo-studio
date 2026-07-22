@@ -13,3 +13,6 @@ public/onnxruntime/
 # AI 模型文件（~42MB+），由 download-models.sh + patch 部署
 public/models/
 .vercel
+
+# 服务端模型文件
+/server/models/
