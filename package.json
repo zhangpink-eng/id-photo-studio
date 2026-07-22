@@ -8,7 +8,7 @@
     "start": "next start",
     "patch": "bash patch-webgpu.sh",
     "download-models": "bash download-models.sh",
-    "vercel-build": "bash vercel-download-models.sh && bash patch-webgpu.sh && next build",
+    "vercel-build": "bash patch-webgpu.sh && next build",
     "postinstall": "bash patch-webgpu.sh",
     "pretest": "bash patch-webgpu.sh"
   },

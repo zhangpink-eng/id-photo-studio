@@ -1,15 +1,15 @@
 /**
- * AI 人像抠图（浏览器端，基于 @imgly/background-removal）
+ * AI 人像抠图 — 双模式：云端API / 浏览器本地
  *
- * 完全在浏览器本地执行，不上传图片数据到服务器。
+ * 两种模式自动切换：
+ *   云端API  — 设置 NEXT_PUBLIC_REMOVE_BG_API 环境变量
+ *              照片上传到服务器处理，用户无需下载 168MB 模型
+ *   浏览器本地 — 默认模式，模型在浏览器端运行，照片不上传
  *
- * 资源加载优先级：
- * 1. public/models/        → 本地 AI 模型（由 download-models.sh + patch 部署）
- * 2. public/onnxruntime/   → 本地 WASM 运行时（patch 自动部署）
- * 3. staticimgly.com CDN   → 上述都无可用时的回退
+ * 优先级：环境变量 > URL 参数 > 默认（浏览器本地）
  */
 
-import { removeBackground } from '@imgly/background-removal';
+import { removeBackground as localRemoveBg } from '@imgly/background-removal';
 
 export type RemoveBgCallback = (progress: number, status: string) => void;
 
@@ -18,9 +18,6 @@ const DEFAULT_MODEL = 'isnet';
 
 /**
  * 获取 NEXT_PUBLIC_* 环境变量（安全兼容浏览器端）
- * Next.js 14 在构建时把 NEXT_PUBLIC_* 替换为实际值，
- * 但如果未设置环境变量，DefinePlugin 可能留下 process.env 引用导致浏览器报错。
- * 此函数安全兜底。
  */
 function getPublicEnv(name: string): string | undefined {
   try {
@@ -28,23 +25,95 @@ function getPublicEnv(name: string): string | undefined {
       return process.env[name];
     }
   } catch {
-    // 浏览器端无 process，静默处理
+    // 浏览器端无 process
   }
   return undefined;
 }
 
-/** 模型路径优先级：环境变量CDN > 本地静态目录 */
+/**
+ * 判断是否使用云端 API 模式
+ */
+function isServerMode(): boolean {
+  const apiUrl = getPublicEnv('NEXT_PUBLIC_REMOVE_BG_API');
+  if (apiUrl && apiUrl.length > 0) return true;
+
+  // 也支持 URL 查询参数覆盖（例如临时切服务器模式）
+  if (typeof window !== 'undefined') {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('server') === '1') return true;
+  }
+
+  return false;
+}
+
+/**
+ * 获取云端 API 地址
+ */
+function getServerApiUrl(): string {
+  const apiUrl = getPublicEnv('NEXT_PUBLIC_REMOVE_BG_API');
+  if (apiUrl) return apiUrl.replace(/\/+$/, '');
+  return '';
+}
+
+// ============================================================
+// 云端 API 模式
+// ============================================================
+
+async function removeImageBackgroundServer(
+  imageBlob: Blob,
+  onProgress?: RemoveBgCallback,
+): Promise<Blob> {
+  const apiBase = getServerApiUrl();
+  if (!apiBase) throw new Error('未配置云端 API 地址');
+
+  onProgress?.(5, '正在上传照片...');
+
+  // 上传前先压缩到足够清晰但不太大
+  const formData = new FormData();
+  formData.append('image', imageBlob, 'photo.jpg');
+
+  try {
+    const response = await fetch(`${apiBase}/api/remove-bg`, {
+      method: 'POST',
+      body: formData,
+    });
+
+    if (!response.ok) {
+      let detail = '服务器处理失败';
+      try {
+        const errBody = await response.json();
+        detail = errBody.error || detail;
+      } catch {}
+      throw new Error(detail);
+    }
+
+    onProgress?.(80, '服务器抠图中...');
+
+    const resultBlob = await response.blob();
+    onProgress?.(100, '抠图完成 ✓');
+
+    return resultBlob;
+  } catch (err) {
+    onProgress?.(0, '失败');
+    console.error('=== 云端抠图失败 ===', err);
+    const msg = err instanceof Error ? err.message : '未知错误';
+    throw new Error(`抠图失败：${msg}`);
+  }
+}
+
+// ============================================================
+// 浏览器本地模式（原有逻辑）
+// ============================================================
+
+/** 模型路径 */
 function getModelBasePath(): string {
   if (typeof window === 'undefined') return '/models/';
   const cdnUrl = getPublicEnv('NEXT_PUBLIC_MODEL_CDN_URL');
   if (cdnUrl) return cdnUrl.replace(/\/+$/, '') + '/';
-  // 开发/默认：使用本地静态目录（必须是绝对 URL，因为 imgly 内部用 new URL(base, path) 拼接）
   return window.location.origin + '/models/';
 }
 
-/**
- * 检测本地模型 cache 是否可用
- */
+/** 检测本地模型是否可用 */
 async function checkLocalModelAvailable(): Promise<boolean> {
   if (typeof window === 'undefined') return false;
   try {
@@ -55,7 +124,7 @@ async function checkLocalModelAvailable(): Promise<boolean> {
   }
 }
 
-/** WASM CDN 路径 */
+/** WASM 路径 */
 function getWasmBasePath(): string {
   if (typeof window === 'undefined') return '/onnxruntime/';
   const cdnUrl = getPublicEnv('NEXT_PUBLIC_MODEL_CDN_URL');
@@ -63,10 +132,7 @@ function getWasmBasePath(): string {
   return window.location.origin + '/onnxruntime/';
 }
 
-/**
- * 移除图片背景，返回透明背景的人像 PNG
- */
-export async function removeImageBackground(
+async function removeImageBackgroundLocal(
   imageBlob: Blob,
   onProgress?: RemoveBgCallback,
 ): Promise<Blob> {
@@ -76,18 +142,16 @@ export async function removeImageBackground(
   onProgress?.(5, localAvailable ? '模型就绪' : '正在加载 AI 模型...');
 
   try {
-    // 设置 WASM 运行时路径（patch 后的 @imgly 会读这个值）
     if (typeof window !== 'undefined') {
       (window as any).__WASM_PATH = getWasmBasePath();
     }
 
-    const result = await removeBackground(imageBlob, {
+    const result = await localRemoveBg(imageBlob, {
       ...(localAvailable && {
         publicPath: getModelBasePath(),
       }),
       model: DEFAULT_MODEL,
       progress: (key: string, current: number, total: number) => {
-        // 即使 total 为 0（流式下载未知总大小），也用小步递进保持 UI 反馈
         let pct: number;
         let status: string;
 
@@ -117,13 +181,34 @@ export async function removeImageBackground(
     return result;
   } catch (error) {
     onProgress?.(0, '失败');
-    // 打印完整错误到 Console（按 F12 查看）
-    console.error('=== 背景移除失败（完整错误）===', error);
+    console.error('=== 背景移除失败 ===', error);
     const msg =
       error instanceof Error
-        ? `背景移除失败：${error.message}` +
-          (error.stack ? `\n堆栈：${error.stack.slice(0, 300)}` : '')
-        : `背景移除失败：未知错误（${String(error).slice(0, 200)}）`;
+        ? `背景移除失败：${error.message}`
+        : '背景移除失败：未知错误';
     throw new Error(msg);
   }
+}
+
+// ============================================================
+// 统一入口
+// ============================================================
+
+/**
+ * 移除图片背景，返回透明背景的人像 PNG
+ *
+ * 自动选择模式：
+ *   设 NEXT_PUBLIC_REMOVE_BG_API → 调用云端 API
+ *   否则 → 浏览器本地处理
+ */
+export async function removeImageBackground(
+  imageBlob: Blob,
+  onProgress?: RemoveBgCallback,
+): Promise<Blob> {
+  if (isServerMode()) {
+    console.log('[抠图] 使用云端 API 模式');
+    return removeImageBackgroundServer(imageBlob, onProgress);
+  }
+  console.log('[抠图] 使用浏览器本地模式');
+  return removeImageBackgroundLocal(imageBlob, onProgress);
 }
