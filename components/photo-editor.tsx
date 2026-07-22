@@ -16,7 +16,6 @@ import type { SceneConfig } from '@/lib/scenes';
 import LayoutEditor from '@/components/layout-editor';
 import CompliancePanel from '@/components/compliance-panel';
 import BatchGenerator from '@/components/batch-generator';
-import PreviewTemplates from '@/components/preview-templates';
 import { autoFixPipeline } from '@/lib/auto-fix';
 import { addHistoryRecord, generateThumbnail } from '@/lib/history';
 
@@ -974,7 +973,6 @@ export default function PhotoEditor({ image, imageUrl, scene, onReset }: PhotoEd
         {/* ---- 头部占比检测（仅处理完成后显示）---- */}
         {step === 'done' && personBlob && (
           <div className="pt-2">
-            <PreviewTemplates personBlob={personBlob} scene={scene} />
           </div>
         )}
 
