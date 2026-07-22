@@ -341,7 +341,13 @@ export default function PhotoEditor({ image, imageUrl, scene, onReset }: PhotoEd
           fillStyle = bgColor;
         }
 
-        const result = await compositeImage(personBlob, fillStyle, targetW, targetH);
+        const result = await compositeImage(
+          personBlob,
+          fillStyle,
+          targetW,
+          targetH,
+          scene?.headRatio,
+        );
 
         if (!cancelled) {
           const url = URL.createObjectURL(result);
