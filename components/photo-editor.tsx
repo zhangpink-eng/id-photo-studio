@@ -192,6 +192,29 @@ export default function PhotoEditor({ image, imageUrl, scene, onReset }: PhotoEd
     }
   }, [beautyUrl]);
 
+  /** 标记是否已自动开始处理（避免重复触发） */
+  const autoStartedRef = useRef(false);
+  const sceneRef = useRef(scene);
+  sceneRef.current = scene;
+
+  // 自动处理：进入编辑时如果选了场景，自动开始抠图+换底+美颜
+  useEffect(() => {
+    if (autoStartedRef.current) return;
+    if (!sceneRef.current) return;
+
+    autoStartedRef.current = true;
+    setStatusText('即将开始自动处理...');
+    setStep('downloading');
+
+    const timer = setTimeout(() => {
+      setBeauty({ smoothing: 50, spotHeal: 40, brightness: 25, sharpness: 30 });
+      setShowBeauty(true);
+      handleRemoveBackground();
+    }, 300);
+
+    return () => clearTimeout(timer);
+  }, []);
+
   // ---- 合成预览（依赖变化时自动重算） ----
   useEffect(() => {
     if (!personBlob) {
