@@ -2,6 +2,7 @@
 
 import { useRef, useEffect } from 'react';
 import type { SceneConfig } from '@/lib/scenes';
+import { PHOTO_SIZES } from '@/lib/constants';
 
 interface PreviewTemplatesProps {
   previewUrl: string | null;
@@ -51,9 +52,11 @@ export default function PreviewTemplates({ previewUrl, scene = null }: PreviewTe
           if (data[(y * cw + x) * 4 + 3] > 128) { bottom = y; break; }
 
       // 3. 画证件照尺寸框（居中，维持目标宽高比）
-      const mmToPx = (mm: number) => mm / 25.4 * 300 * (cw / (scene.headRatio.max * 600));
+      // 从场景匹配真实照片尺寸比例
+      const sceneSize = PHOTO_SIZES.find((s) => s.id === scene.sizeId);
+      const sizeRatio = sceneSize ? sceneSize.widthMm / sceneSize.heightMm : 0.7;
       const boxW = Math.round(cw * 0.75);
-      const boxH = Math.round(boxW * (scene.headRatio.max / 0.7));
+      const boxH = Math.round(boxW / sizeRatio);
       const boxX = (cw - boxW) / 2;
       const boxY = (h - boxH) / 2;
 
@@ -80,9 +83,7 @@ export default function PreviewTemplates({ previewUrl, scene = null }: PreviewTe
         const metrics = ctx.measureText(label);
         const labelPad = 6;
         ctx.fillStyle = 'rgba(255,255,255,0.85)';
-        ctx.beginPath();
-        ctx.roundRect(boxX + 4, boxY + 4, metrics.width + labelPad * 2, fontSize + labelPad * 2, 4);
-        ctx.fill();
+        ctx.fillRect(boxX + 4, boxY + 4, metrics.width + labelPad * 2, fontSize + labelPad * 2);
 
         ctx.fillStyle = '#3b82f6';
         ctx.fillText(label, boxX + 4 + labelPad, boxY + 4 + fontSize + labelPad);
