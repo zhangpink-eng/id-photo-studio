@@ -8,6 +8,7 @@
     "start": "next start",
     "patch": "bash patch-webgpu.sh",
     "download-models": "bash download-models.sh",
+    "vercel-build": "MODEL_CACHE_DIR=/tmp/model-cache bash download-models.sh --model isnet_quint8 && MODEL_CACHE_DIR=/tmp/model-cache bash patch-webgpu.sh && next build",
     "postinstall": "bash patch-webgpu.sh",
     "pretest": "bash patch-webgpu.sh"
   },
