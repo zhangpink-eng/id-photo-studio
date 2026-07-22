@@ -41,6 +41,39 @@ const PROCESSING_STAGES: ProcessingStage[] = [
   { key: 'compositing', label: '合成效果',         detail: '正在合成预览图...',           icon: '🎨' },
 ];
 
+/**
+ * 检查抠图结果是否有足够的人像像素
+ * 空/无效照片 → 提前退出并提示
+ */
+async function checkHasPerson(blob: Blob): Promise<boolean> {
+  try {
+    const img = await loadImage(blob);
+    // 缩到 200px 检测就够了
+    const MAX = 200;
+    let w = img.naturalWidth, h = img.naturalHeight;
+    if (w > MAX || h > MAX) {
+      const ratio = MAX / Math.max(w, h);
+      w = Math.round(w * ratio);
+      h = Math.round(h * ratio);
+    }
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d')!;
+    ctx.drawImage(img, 0, 0, w, h);
+    const data = ctx.getImageData(0, 0, w, h).data;
+    let opaquePixels = 0;
+    for (let i = 0; i < w * h; i++) {
+      if (data[i * 4 + 3] > 128) opaquePixels++;
+    }
+    const ratio = opaquePixels / (w * h);
+    // 至少 3% 像素不透明才认为有人物
+    return ratio > 0.03;
+  } catch {
+    return true; // 检测失败时继续，不阻塞用户
+  }
+}
+
 export default function PhotoEditor({ image, imageUrl, scene, onReset }: PhotoEditorProps) {
   // ---- Core State ----
   const [personBlob, setPersonBlob] = useState<Blob | null>(null);
@@ -108,6 +141,16 @@ export default function PhotoEditor({ image, imageUrl, scene, onReset }: PhotoEd
       if (beautyUrl !== imageUrl) URL.revokeObjectURL(beautyUrl);
     };
   }, [beautyUrl, imageUrl]);
+
+  /** 场景变化时只更新尺寸和底色，不重新 AI 抠图 */
+  useEffect(() => {
+    if (!scene) return;
+    const newSize = PHOTO_SIZES.find((s) => s.id === scene.sizeId);
+    if (newSize) setSelectedSize(newSize);
+    const newBg = BG_COLORS.find((c) => c.value === scene.bgColor);
+    if (newBg) setBgColor(newBg.value);
+    setError(null);
+  }, [scene?.id]);
 
   // ---- Background ----
   const [bgColor, setBgColor] = useState(
@@ -216,6 +259,15 @@ export default function PhotoEditor({ image, imageUrl, scene, onReset }: PhotoEd
         }
       });
       setProgress(85);
+
+      // 检测抠图结果是否有效（是否有足够的人像像素）
+      const hasPerson = await checkHasPerson(blob);
+      if (!hasPerson) {
+        setStep('error');
+        setError('未检测到人物，请使用正面半身照片或调整光线');
+        setStatusText('❌ 未检测到人物');
+        return;
+      }
 
       // Stage 2: 合成预览
       setStep('compositing');

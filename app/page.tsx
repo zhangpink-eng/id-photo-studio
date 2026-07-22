@@ -151,7 +151,7 @@ export default function Home() {
         {/* 第三步：编辑 */}
         {step === 'edit' && image && imageUrl && (
           <PhotoEditor
-            key={image.name + (scene?.id || '')}
+            key={image.name}
             image={image}
             imageUrl={imageUrl}
             scene={scene}
