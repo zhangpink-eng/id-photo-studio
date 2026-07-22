@@ -203,16 +203,31 @@ export default function PhotoEditor({ image, imageUrl, scene, onReset }: PhotoEd
     if (!sceneRef.current) return;
 
     autoStartedRef.current = true;
-    setStatusText('即将开始自动处理...');
+    setStatusText('准备上传照片...');
     setStep('downloading');
+    setProgress(1);
 
-    const timer = setTimeout(() => {
+    // 模拟进度：在 AI 模型加载期间保证进度条不卡死
+    let fakeProgress = 1;
+    const fakeTimer = setInterval(() => {
+      fakeProgress += 1 + Math.random() * 2;
+      if (fakeProgress < 90) {
+        setProgress((prev) => Math.max(prev, Math.round(fakeProgress)));
+      }
+    }, 800);
+
+    const timer = setTimeout(async () => {
       setBeauty({ smoothing: 50, spotHeal: 40, brightness: 25, sharpness: 30 });
       setShowBeauty(true);
+      // 当真实进度超过模拟值时，模拟自动停止
+      clearInterval(fakeTimer);
       handleRemoveBackground();
     }, 300);
 
-    return () => clearTimeout(timer);
+    return () => {
+      clearTimeout(timer);
+      clearInterval(fakeTimer);
+    };
   }, []);
 
   // ---- 合成预览（依赖变化时自动重算） ----
@@ -420,11 +435,18 @@ export default function PhotoEditor({ image, imageUrl, scene, onReset }: PhotoEd
               />
             ) : hasPerson ? (
               <div className="flex flex-col items-center gap-2 text-gray-400">
-                <svg className="animate-spin h-6 w-6" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                </svg>
-                <span className="text-sm">正在合成...</span>
+                <div className="relative">
+                  <svg className="animate-spin h-10 w-10 text-brand-400" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                </div>
+                <span className="text-sm font-medium text-gray-500 animate-pulse">
+                  {isProcessing ? statusText : '正在合成...'}
+                </span>
+                {isProcessing && progress > 0 && (
+                  <span className="text-xs text-gray-400">{progress}%</span>
+                )}
               </div>
             ) : (
               <div className="text-center text-gray-400 p-8">
@@ -443,12 +465,15 @@ export default function PhotoEditor({ image, imageUrl, scene, onReset }: PhotoEd
         {isProcessing && (
           <div className="bg-brand-50 rounded-xl p-4">
             <div className="flex items-center justify-between mb-2">
-              <span className="text-sm text-brand-700">{statusText}</span>
+              <span className="text-sm text-brand-700 flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-brand-500 animate-pulse" />
+                {statusText}
+              </span>
               <span className="text-sm font-medium text-brand-600">{progress}%</span>
             </div>
-            <div className="w-full h-2 bg-brand-100 rounded-full overflow-hidden">
+            <div className="w-full h-2.5 bg-brand-100 rounded-full overflow-hidden">
               <div
-                className="h-full bg-brand-500 rounded-full transition-all duration-300"
+                className="h-full bg-gradient-to-r from-brand-500 to-brand-400 rounded-full transition-all duration-300"
                 style={{ width: `${progress}%` }}
               />
             </div>

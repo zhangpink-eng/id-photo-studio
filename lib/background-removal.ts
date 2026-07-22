@@ -71,14 +71,29 @@ export async function removeImageBackground(
       }),
       model: DEFAULT_MODEL,
       progress: (key: string, current: number, total: number) => {
-        if (total > 0) {
-          const pct = Math.min(Math.round((current / total) * 100), 99);
-          let status = key;
-          if (key === 'wasm') status = '正在加载 AI 模型...';
-          else if (key === 'compute' || key === 'inference') status = '正在识别人物轮廓...';
-          else if (key.startsWith('fetch:')) status = `正在下载模型 (${pct}%)`;
-          onProgress?.(pct, status);
+        // 即使 total 为 0（流式下载未知总大小），也用小步递进保持 UI 反馈
+        let pct: number;
+        let status: string;
+
+        if (key === 'wasm') {
+          status = '正在加载 AI 引擎...';
+          pct = total > 0 ? Math.min(10, Math.round((current / total) * 15)) : 8;
+        } else if (key === 'compute' || key === 'inference') {
+          status = '正在识别人物轮廓...';
+          pct = total > 0 ? Math.min(85, 15 + Math.round((current / total) * 70)) : 50;
+        } else if (key.startsWith('fetch:')) {
+          status = total > 0
+            ? `正在下载模型 (${Math.round(current / 1024 / 1024)}/${Math.round(total / 1024 / 1024)} MB)`
+            : `正在下载模型 (${Math.round(current / 1024 / 1024)} MB)`;
+          pct = total > 0
+            ? Math.min(80, Math.round((current / total) * 80))
+            : Math.min(80, 5 + Math.round((current / 1048576) * 5));
+        } else {
+          pct = total > 0 ? Math.min(99, Math.round((current / total) * 100)) : 50;
+          status = `处理中 ${pct}%`;
         }
+
+        onProgress?.(pct, status);
       },
     });
 
